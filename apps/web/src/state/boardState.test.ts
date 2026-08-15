@@ -5,7 +5,9 @@ import {
   boardReducer,
   initialBoardState,
   isLayerVisible,
+  isViaSpanVisible,
   selectedNetId,
+  viaSpanKey,
 } from "./boardState";
 
 const review = { board_id: "b1", vias: [{ id: "via-1", net_id: "net-gnd" }] };
@@ -60,6 +62,52 @@ describe("boardReducer", () => {
     const first = state.focusRequest?.token;
     state = boardReducer(state, { type: "focus-requested", x_m: 1, y_m: 2, radius_m: 0.001 });
     expect(state.focusRequest?.token).not.toBe(first);
+  });
+
+  it("toggling via-span visibility twice restores the span", () => {
+    const key = viaSpanKey("L1", "L2");
+    let state = boardReducer(initialBoardState, {
+      type: "via-span-visibility-toggled",
+      spanKey: key,
+    });
+    expect(isViaSpanVisible(state, key)).toBe(false);
+    state = boardReducer(state, { type: "via-span-visibility-toggled", spanKey: key });
+    expect(isViaSpanVisible(state, key)).toBe(true);
+  });
+
+  it("all-via-spans-shown clears every hidden span", () => {
+    let state = boardReducer(initialBoardState, {
+      type: "via-span-visibility-toggled",
+      spanKey: viaSpanKey("L1", "L2"),
+    });
+    state = boardReducer(state, {
+      type: "via-span-visibility-toggled",
+      spanKey: viaSpanKey("L2", "L3"),
+    });
+    state = boardReducer(state, { type: "all-via-spans-shown" });
+    expect(state.hiddenViaSpans.size).toBe(0);
+  });
+
+  it("a successful import also resets hidden via spans", () => {
+    let state = boardReducer(initialBoardState, {
+      type: "via-span-visibility-toggled",
+      spanKey: viaSpanKey("L1", "L2"),
+    });
+    state = boardReducer(state, {
+      type: "import-succeeded",
+      review: review as unknown as BoardReviewResponse,
+    });
+    expect(state.hiddenViaSpans.size).toBe(0);
+  });
+});
+
+describe("viaSpanKey", () => {
+  it("is independent of endpoint order", () => {
+    expect(viaSpanKey("L1", "L2")).toBe(viaSpanKey("L2", "L1"));
+  });
+
+  it("distinguishes different spans", () => {
+    expect(viaSpanKey("L1", "L2")).not.toBe(viaSpanKey("L2", "L3"));
   });
 });
 

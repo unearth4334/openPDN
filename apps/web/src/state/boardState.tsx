@@ -47,6 +47,8 @@ export interface BoardState {
   /** Layer opacity in [0.1, 1]; anything absent renders at 1. */
   layerOpacity: Readonly<Record<string, number>>;
   soloLayerId: string | null;
+  /** Hidden via spans, keyed by `viaSpanKey`; anything absent is visible. */
+  hiddenViaSpans: ReadonlySet<string>;
   selection: Selection | null;
   /** Vias highlighted from the via-group table. */
   highlightedViaIds: ReadonlySet<string>;
@@ -62,6 +64,7 @@ export const initialBoardState: BoardState = {
   hiddenLayers: new Set(),
   layerOpacity: {},
   soloLayerId: null,
+  hiddenViaSpans: new Set(),
   selection: null,
   highlightedViaIds: new Set(),
   bottomTab: "stackup",
@@ -78,6 +81,8 @@ export type BoardAction =
   | { type: "layer-solo-toggled"; layerId: string }
   | { type: "all-layers-shown" }
   | { type: "layer-opacity-set"; layerId: string; opacity: number }
+  | { type: "via-span-visibility-toggled"; spanKey: string }
+  | { type: "all-via-spans-shown" }
   | { type: "selected"; selection: Selection | null }
   | { type: "via-group-highlighted"; viaIds: string[] }
   | { type: "bottom-tab-changed"; tab: BottomTab }
@@ -128,6 +133,17 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
         ...state,
         layerOpacity: { ...state.layerOpacity, [action.layerId]: action.opacity },
       };
+    case "via-span-visibility-toggled": {
+      const hidden = new Set(state.hiddenViaSpans);
+      if (hidden.has(action.spanKey)) {
+        hidden.delete(action.spanKey);
+      } else {
+        hidden.add(action.spanKey);
+      }
+      return { ...state, hiddenViaSpans: hidden };
+    }
+    case "all-via-spans-shown":
+      return { ...state, hiddenViaSpans: new Set() };
     case "selected":
       return { ...state, selection: action.selection };
     case "via-group-highlighted":
@@ -155,6 +171,16 @@ export function isLayerVisible(state: BoardState, layerId: string): boolean {
     return state.soloLayerId === layerId;
   }
   return !state.hiddenLayers.has(layerId);
+}
+
+/** Identifies a via span (the pair of layers it connects) independent of endpoint order. */
+export function viaSpanKey(fromLayerId: string, toLayerId: string): string {
+  return [fromLayerId, toLayerId].sort().join(":");
+}
+
+/** True when vias on this span should be drawn under the current visibility state. */
+export function isViaSpanVisible(state: BoardState, spanKey: string): boolean {
+  return !state.hiddenViaSpans.has(spanKey);
 }
 
 /** The net id the current selection implies, if any (for highlight/dim). */

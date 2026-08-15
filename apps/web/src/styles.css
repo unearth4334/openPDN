@@ -16,6 +16,7 @@
   --font-size-base: 13px;
   --font-size-small: 11px;
   --row-height: 22px;
+  --via-stack-col-width: 14px;
 
   --surface-0: #ffffff;
   --surface-1: #f4f5f7;
@@ -467,6 +468,45 @@ body {
   gap: 6px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--surface-2);
+}
+
+/* --- Via stack columns --------------------------------------------------------- */
+/* Toggle row (row 1) and one row per conductive layer (row 2+), both sized to
+   `--row-height` so via bars line up exactly with the layer rows beside them. */
+.layers-grid {
+  display: grid;
+  grid-auto-rows: var(--row-height);
+  align-items: center;
+  column-gap: 2px;
+}
+
+.via-stack__toggle-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.via-stack__cell {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.via-stack__cell--filled::before {
+  content: "";
+  width: 6px;
+  margin: 0 auto;
+  background: var(--viewport-via-ring);
+}
+
+/* Round the bar's exposed end at the top and bottom of a via's span, so a
+   stack reads as one continuous barrel rather than a column of ticks. */
+.via-stack__cell--top::before {
+  border-radius: 3px 3px 0 0;
+}
+.via-stack__cell--bottom::before {
+  border-radius: 0 0 3px 3px;
 }
 
 /* --- Net list ------------------------------------------------------------------ */

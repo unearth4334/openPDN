@@ -25,7 +25,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BoardReviewResponse, ViaResponse } from "../api/types";
 import { useBoardActions } from "../hooks/useBoardActions";
 import { formatMm } from "../lib/units";
-import { isLayerVisible, selectedNetId, useBoardState } from "../state/boardState";
+import {
+  isLayerVisible,
+  isViaSpanVisible,
+  selectedNetId,
+  useBoardState,
+  viaSpanKey,
+} from "../state/boardState";
 import { type Camera, fitBounds, focusOn, pan, screenToWorld, zoomAt } from "../viewer/camera";
 import { resizeCanvasIfNeeded } from "../viewer/canvasSize";
 import { draw, type LayerPaint } from "../viewer/render";
@@ -64,6 +70,7 @@ interface PaintInputs {
   highlightNetId: string | null;
   selectedRegionId: string | null;
   hoveredRegionId: string | null;
+  visibleVias: ViaResponse[];
   highlightedViaIds: ReadonlySet<string>;
   selectedViaId: string | null;
 }
@@ -128,6 +135,19 @@ function BoardCanvas() {
     [conductiveLayers, state],
   );
 
+  // Via visibility is its own axis, independent of layer visibility: a via
+  // stays selectable/drawn as long as its span's toggle is on, regardless of
+  // whether either endpoint layer is currently shown.
+  const visibleVias = useMemo(
+    () =>
+      review
+        ? review.vias.filter((via) =>
+            isViaSpanVisible(state, viaSpanKey(via.from_layer_id, via.to_layer_id)),
+          )
+        : [],
+    [review, state],
+  );
+
   /** Paint immediately from the latest inputs. Stable for the whole lifetime. */
   const paintNow = useCallback(() => {
     const canvas = canvasRef.current;
@@ -146,7 +166,7 @@ function BoardCanvas() {
       highlightNetId: paint.highlightNetId,
       selectedRegionId: paint.selectedRegionId,
       hoveredRegionId: paint.hoveredRegionId,
-      vias: paint.review.vias,
+      vias: paint.visibleVias,
       highlightedViaIds: paint.highlightedViaIds,
       selectedViaId: paint.selectedViaId,
       colors: {
@@ -201,6 +221,7 @@ function BoardCanvas() {
       highlightNetId: selectedNetId(state),
       selectedRegionId: state.selection?.kind === "region" ? state.selection.regionId : null,
       hoveredRegionId: hoverTarget?.regionId ?? null,
+      visibleVias,
       highlightedViaIds: state.highlightedViaIds,
       selectedViaId: state.selection?.kind === "via" ? state.selection.viaId : null,
     };
@@ -291,7 +312,7 @@ function BoardCanvas() {
       clientX - rect.left,
       clientY - rect.top,
     );
-    const via = nearestVia(review.vias, world.x_m, world.y_m, 6 / camera.scale_px_per_m);
+    const via = nearestVia(visibleVias, world.x_m, world.y_m, 6 / camera.scale_px_per_m);
     if (via) {
       return {
         x_m: world.x_m,

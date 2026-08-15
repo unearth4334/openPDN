@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from openpdn.domain.board import Board, CopperRegionId, LayerId, NetId
-    from openpdn.domain.geometry import Polygon2D
+    from openpdn.domain.board import Board, CopperRegionId, LayerId, NetId, ViaId
+    from openpdn.domain.geometry import Point2D, Polygon2D
+    from openpdn.domain.provenance import Quantity
     from openpdn.domain.results import Diagnostic
 
 
@@ -53,6 +54,37 @@ class NormalizedRegion:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsolidatedVia:
+    """One solver-ready via barrel, after coincident duplicates are merged.
+
+    Fabrication data can list the same physical via twice (e.g. once per
+    padstack instance that happened to land on it), or a design can carry
+    barrels that overlap without being the same via -- both are geometry
+    problems a solver cannot resolve on its own, so they are resolved (or
+    flagged) here rather than downstream.
+
+    Attributes:
+        id: Stable identifier, deterministic for identical input.
+        via_ids: The imported `Via`s this barrel represents. More than one
+            only when exactly-coincident duplicates were merged.
+        net_id: Net the via belongs to; `None` for an unassigned via.
+        from_layer_id: Upper connected conductive layer.
+        to_layer_id: Lower connected conductive layer.
+        position: Centre of the barrel in board coordinates.
+        drill_diameter: Tool diameter, if known; the outer bound of the
+            copper barrel, since plating narrows the hole inward from it.
+    """
+
+    id: str
+    via_ids: tuple[ViaId, ...]
+    net_id: NetId | None
+    from_layer_id: LayerId
+    to_layer_id: LayerId
+    position: Point2D
+    drill_diameter: Quantity | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizationStats:
     """Volume and performance instrumentation for one normalisation run."""
 
@@ -70,6 +102,7 @@ class NormalizedGeometry:
 
     normalizer_version: str
     regions: tuple[NormalizedRegion, ...]
+    vias: tuple[ConsolidatedVia, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = field(default_factory=tuple)
     stats: NormalizationStats | None = None
 
@@ -89,6 +122,11 @@ class GeometryNormalizer(Protocol):
 
     def normalize(self, board: Board) -> NormalizedGeometry:
         """Union the board's copper per `(net, physical layer)`.
+
+        Also consolidates the board's vias: exactly-coincident duplicates are
+        merged, and physically overlapping-but-distinct barrels are flagged
+        as diagnostics rather than merged, since merging them would be a
+        guess about which one is real.
 
         Raises:
             GeometryNormalizationError: If the copper cannot be normalised.

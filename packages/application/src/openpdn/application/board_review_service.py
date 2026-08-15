@@ -207,6 +207,10 @@ class BoardReviewService:
             format_revision=report.format_revision,
             source_digest=board.provenance.source_digest if board.provenance else None,
             stored_at_epoch_s=record.stored_at_epoch_s,
+            # Import-time only: a normalization-stage ERROR (e.g. an
+            # overlapping via pair) does not currently downgrade readiness,
+            # only the diagnostics list below. Revisit if that proves
+            # confusing in practice.
             readiness=report.readiness,
             capability_items=report.items,
             diagnostics=(*record.import_result.diagnostics, *normalized.diagnostics),

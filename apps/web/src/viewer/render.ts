@@ -110,13 +110,9 @@ function drawVias(
   options: DrawOptions,
   px: (n: number) => number,
 ): void {
-  const visibleLayers = new Set(
-    options.layerPaints.filter((paint) => paint.visible).map((paint) => paint.layerId),
-  );
+  // Visibility is a caller concern: `options.vias` is already filtered to
+  // the via spans currently toggled on (see Viewport's `visibleVias`).
   for (const via of options.vias) {
-    if (!visibleLayers.has(via.from_layer_id) && !visibleLayers.has(via.to_layer_id)) {
-      continue;
-    }
     const dimmed = options.highlightNetId !== null && via.net_id !== options.highlightNetId;
     const highlighted = options.highlightedViaIds.has(via.id) || via.id === options.selectedViaId;
     const drill_m = via.drill_diameter?.value ?? 0.15e-3;

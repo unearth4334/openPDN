@@ -7,6 +7,7 @@ solvers (ADR-0007).
 """
 
 from openpdn.geometry.api import (
+    ConsolidatedVia,
     GeometryNormalizationError,
     GeometryNormalizer,
     NormalizationStats,
@@ -15,6 +16,7 @@ from openpdn.geometry.api import (
 )
 
 __all__ = [
+    "ConsolidatedVia",
     "GeometryNormalizationError",
     "GeometryNormalizer",
     "NormalizationStats",
