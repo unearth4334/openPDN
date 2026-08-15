@@ -17,6 +17,7 @@
   --font-size-small: 11px;
   --row-height: 22px;
   --via-stack-col-width: 14px;
+  --opacity-col-width: 34px;
 
   --surface-0: #ffffff;
   --surface-1: #f4f5f7;
@@ -458,9 +459,73 @@ body {
   border-color: var(--accent);
 }
 
-.layer-row__opacity {
-  width: 52px;
+/* --- Opacity column ------------------------------------------------------------ */
+/* Its own grid column (see `.layers-grid`), not part of `.layer-row`: the
+   icon sits in the header row, in line with the via-span toggles, and the
+   percent value sits at the layer's own row. */
+.opacity-icon-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.opacity-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.opacity-cell__value {
+  font: inherit;
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 1px 3px;
+  cursor: pointer;
+}
+
+.opacity-cell__value:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.opacity-cell__value[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* No box-shadow: this app avoids card elevation effects, so the border plus
+   opaque background is what separates the popover from the rows behind it. */
+.opacity-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.opacity-popover input[type="range"] {
+  width: 90px;
   accent-color: var(--accent);
+}
+
+.opacity-popover__value {
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 2.5em;
+  text-align: right;
 }
 
 .panel__actions {

@@ -75,3 +75,53 @@ describe("LayersPanel via stack columns", () => {
     expect(topLayerToggle.checked).toBe(true);
   });
 });
+
+describe("LayersPanel opacity popover", () => {
+  it("shows the current opacity as a percent, popover closed by default", async () => {
+    await openBoard();
+    const value = screen.getByLabelText("Top opacity, 100 percent");
+    expect(value).toBeInTheDocument();
+    expect(screen.queryByLabelText("Top opacity")).not.toBeInTheDocument();
+  });
+
+  it("clicking the percent opens a popover with a slider for that layer", async () => {
+    await openBoard();
+    fireEvent.click(screen.getByLabelText("Top opacity, 100 percent"));
+    const slider = screen.getByLabelText<HTMLInputElement>("Top opacity");
+    expect(slider).toBeInTheDocument();
+    expect(slider.value).toBe("1");
+  });
+
+  it("moving the slider updates the percent readout", async () => {
+    await openBoard();
+    fireEvent.click(screen.getByLabelText("Top opacity, 100 percent"));
+    const slider = screen.getByLabelText<HTMLInputElement>("Top opacity");
+    fireEvent.change(slider, { target: { value: "0.5" } });
+    expect(screen.getByLabelText("Top opacity, 50 percent")).toBeInTheDocument();
+  });
+
+  it("a click outside the popover closes it", async () => {
+    await openBoard();
+    fireEvent.click(screen.getByLabelText("Top opacity, 100 percent"));
+    expect(screen.getByLabelText("Top opacity")).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByLabelText("Top opacity")).not.toBeInTheDocument();
+  });
+
+  it("Escape closes the popover", async () => {
+    await openBoard();
+    fireEvent.click(screen.getByLabelText("Top opacity, 100 percent"));
+    expect(screen.getByLabelText("Top opacity")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByLabelText("Top opacity")).not.toBeInTheDocument();
+  });
+
+  it("opening another layer's popover closes the first", async () => {
+    await openBoard();
+    fireEvent.click(screen.getByLabelText("Top opacity, 100 percent"));
+    expect(screen.getByLabelText("Top opacity")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Bottom opacity, 100 percent"));
+    expect(screen.queryByLabelText("Top opacity")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Bottom opacity")).toBeInTheDocument();
+  });
+});

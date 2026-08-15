@@ -8,11 +8,21 @@
  * keeps all three in step.
  */
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { LayerResponse, ViaResponse } from "../api/types";
 import { isLayerVisible, isViaSpanVisible, useBoardState, viaSpanKey } from "../state/boardState";
 
 const LAYER_COLOR_SLOTS = 6;
+
+/** Two overlapping translucent circles: the conventional opacity/blend glyph. */
+function OpacityIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      <circle cx="4.5" cy="6" r="3.5" fill="currentColor" opacity="0.55" />
+      <circle cx="7.5" cy="6" r="3.5" fill="currentColor" opacity="0.55" />
+    </svg>
+  );
+}
 
 /** One via-stack column: every via connecting the same pair of layers. */
 interface ViaSpanClass {
@@ -79,6 +89,63 @@ export function LayersPanel() {
   );
 }
 
+/** Percent readout that opens a popover slider to edit the layer's opacity. */
+function OpacityCell({
+  layer,
+  opacity,
+  open,
+  onToggle,
+  onChange,
+}: {
+  layer: LayerResponse;
+  opacity: number;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (opacity: number) => void;
+}) {
+  const percent = Math.round(opacity * 100);
+  const sliderRef = useRef<HTMLInputElement | null>(null);
+
+  // Move focus into the slider when the popover opens, per the disclosure
+  // pattern -- the trigger is a click, not page load, so this isn't the
+  // autofocus-on-mount anti-pattern the a11y lint otherwise flags.
+  useEffect(() => {
+    if (open) {
+      sliderRef.current?.focus();
+    }
+  }, [open]);
+
+  return (
+    <div className="opacity-cell">
+      <button
+        type="button"
+        className="opacity-cell__value"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label={`${layer.name} opacity, ${percent} percent`}
+        onClick={onToggle}
+      >
+        {percent}%
+      </button>
+      {open ? (
+        <div className="opacity-popover">
+          <input
+            ref={sliderRef}
+            type="range"
+            min={0.1}
+            max={1}
+            step={0.05}
+            value={opacity}
+            aria-label={`${layer.name} opacity`}
+            onChange={(event) => onChange(Number(event.target.value))}
+          />
+          <span className="opacity-popover__value">{percent}%</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function LayerRows() {
   const { state, dispatch } = useBoardState();
   const review = state.review;
@@ -90,11 +157,37 @@ function LayerRows() {
     () => (review ? buildViaSpanClasses(review.vias, conductive) : []),
     [review, conductive],
   );
+  const [openOpacityLayerId, setOpenOpacityLayerId] = useState<string | null>(null);
+
+  // Close the popover on an outside click or Escape; only listens while open.
+  useEffect(() => {
+    if (openOpacityLayerId === null) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(".opacity-cell")) {
+        setOpenOpacityLayerId(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenOpacityLayerId(null);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openOpacityLayerId]);
+
   if (review === null) {
     return null;
   }
   const nameByLayerId = new Map(conductive.map((layer) => [layer.id, layer.name]));
   const viaColumnCount = spanClasses.length;
+  const opacityColumn = viaColumnCount + 2;
 
   return (
     <>
@@ -119,8 +212,17 @@ function LayerRows() {
       </div>
       <div
         className="panel__body layers-grid"
-        style={{ gridTemplateColumns: `repeat(${viaColumnCount}, var(--via-stack-col-width)) 1fr` }}
+        style={{
+          gridTemplateColumns: `repeat(${viaColumnCount}, var(--via-stack-col-width)) 1fr var(--opacity-col-width)`,
+        }}
       >
+        <div
+          className="opacity-icon-cell"
+          style={{ gridColumn: opacityColumn, gridRow: 1 }}
+          title="Layer opacity"
+        >
+          <OpacityIcon />
+        </div>
         {spanClasses.map((span, columnIndex) => {
           const fromName = nameByLayerId.get(span.fromLayerId) ?? span.fromLayerId;
           const toName = nameByLayerId.get(span.toLayerId) ?? span.toLayerId;
@@ -210,20 +312,17 @@ function LayerRows() {
                 >
                   S
                 </button>
-                <input
-                  className="layer-row__opacity"
-                  type="range"
-                  min={0.1}
-                  max={1}
-                  step={0.05}
-                  value={state.layerOpacity[layer.id] ?? 1}
-                  aria-label={`${layer.name} opacity`}
-                  onChange={(event) =>
-                    dispatch({
-                      type: "layer-opacity-set",
-                      layerId: layer.id,
-                      opacity: Number(event.target.value),
-                    })
+              </div>
+              <div style={{ gridColumn: opacityColumn, gridRow: rowIndex + 2 }}>
+                <OpacityCell
+                  layer={layer}
+                  opacity={state.layerOpacity[layer.id] ?? 1}
+                  open={openOpacityLayerId === layer.id}
+                  onToggle={() =>
+                    setOpenOpacityLayerId(openOpacityLayerId === layer.id ? null : layer.id)
+                  }
+                  onChange={(opacity) =>
+                    dispatch({ type: "layer-opacity-set", layerId: layer.id, opacity })
                   }
                 />
               </div>
