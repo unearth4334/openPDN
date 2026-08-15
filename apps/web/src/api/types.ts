@@ -151,12 +151,20 @@ export interface ComponentResponse {
   terminal_count: number;
 }
 
+export interface TerminalPadResponse {
+  id: string;
+  layer_id: string;
+  x_m: number;
+  y_m: number;
+}
+
 export interface TerminalResponse {
   id: string;
   name: string;
   net_id: string;
   component_id: string | null;
   pad_ids: string[];
+  pads: TerminalPadResponse[];
 }
 
 export interface LayerStatsResponse {
@@ -245,4 +253,144 @@ export interface GeometryResponse {
 
 export interface DevFixtureResponse {
   name: string;
+}
+
+// --- Simulation -----------------------------------------------------------------
+
+export type SimulationKind = "ir_drop" | "resistance";
+export type AccuracyProfile = "preview" | "standard" | "high" | "verification";
+export type JobState =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "completed"
+  | "completed_with_warnings"
+  | "failed"
+  | "cancelling"
+  | "cancelled";
+
+export interface SimulationLoadRequest {
+  terminal_id: string;
+  current_a: number;
+}
+
+export interface SimulationDraftRequest {
+  kind: SimulationKind;
+  net_id: string;
+  source_terminal_id: string;
+  accuracy: AccuracyProfile;
+  name?: string;
+  source_voltage_v?: number;
+  loads?: SimulationLoadRequest[];
+  to_terminal_id?: string | null;
+  via_plating_um?: number | null;
+}
+
+export interface EstimateResponse {
+  mesh_points: number;
+  triangles: number;
+  dofs: number;
+  estimated_memory_bytes: number;
+  compute_class: "low" | "moderate" | "high" | "very_high";
+  over_budget: boolean;
+  budget_dofs: number;
+  connectivity_ok: boolean;
+  connectivity_message: string | null;
+  warnings: string[];
+  duplicate_result_job_id: string | null;
+}
+
+export interface JobResponse {
+  job_id: string;
+  name: string;
+  kind: SimulationKind;
+  state: JobState;
+  stage: string;
+  message: string;
+  accuracy: AccuracyProfile;
+  net_id: string;
+  net_name: string;
+  board_id: string;
+  created_at_epoch_s: number;
+  finished_at_epoch_s: number | null;
+  result_summary: Record<string, unknown> | null;
+}
+
+export interface QueueResponse {
+  job: JobResponse;
+  duplicate_of: string | null;
+}
+
+/** One layer of a result's field data, decoded from the binary payload. */
+export interface ResultLayerFields {
+  points: Float32Array;
+  triangles: Uint32Array;
+  voltage_v: Float32Array;
+  j_a_per_m2: Float32Array;
+  power_w: Float32Array;
+}
+
+export interface ResultMetrics {
+  kind: SimulationKind;
+  terminals: {
+    terminal_id: string;
+    voltage_v: number;
+    current_a: number;
+    is_source: boolean;
+  }[];
+  vias: {
+    via_id: string;
+    upper_layer: string;
+    lower_layer: string;
+    x_m: number;
+    y_m: number;
+    conductance_s: number;
+    voltage_upper_v: number;
+    voltage_lower_v: number;
+    current_a: number | null;
+    power_w: number | null;
+  }[];
+  probes: { probe_id: string; resistance_ohm: number }[];
+  nets: {
+    net_id: string;
+    max_voltage_v: number;
+    min_voltage_v: number;
+    ir_drop_v: number;
+    max_j_a_per_m2: number | null;
+    loss_w: number | null;
+  }[];
+  conservation: {
+    residual: number;
+    current_imbalance_fraction: number;
+    power_mismatch_fraction: number;
+    source_total_a: number;
+    load_total_a: number;
+    net_input_power_w: number;
+    dissipated_power_w: number;
+  };
+  quality: {
+    mesh_nodes: number | null;
+    mesh_elements: number | null;
+    matrix_nonzeros: number;
+    residual: number | null;
+    accuracy: AccuracyProfile;
+  };
+  engineering_quantities: Record<string, number>;
+  convergence: {
+    coarse_elements: number;
+    fine_elements: number;
+    target_fraction: number;
+    worst_relative_change: number;
+    converged: boolean;
+    quantities: Record<string, { coarse: number; fine: number; relative_change: number }>;
+  } | null;
+  diagnostics: {
+    code: string;
+    severity: "info" | "warning" | "error";
+    message: string;
+    context: Record<string, string>;
+  }[];
+  layer_files: { layer_id: string; file: string; points: number; triangles: number }[];
+  timings_s: Record<string, number>;
+  board_name: string;
 }

@@ -19,6 +19,7 @@ import { formatMm, formatMm2, formatUm } from "../lib/units";
 import { type Selection, useBoardState } from "../state/boardState";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { QuantityValue } from "./QuantityValue";
+import { ResultMetricsPanel } from "./ResultMetricsPanel";
 
 export interface InspectorPanelProps {
   deployment: DeploymentState;
@@ -34,6 +35,8 @@ export function InspectorPanel({ deployment }: InspectorPanelProps) {
       <div className="panel__body">
         {review === null ? (
           <DeploymentSummary deployment={deployment} />
+        ) : state.activeResult && state.selection === null ? (
+          <ResultMetricsPanel metrics={state.activeResult.metrics} />
         ) : (
           <SelectionDetails review={review} selection={state.selection} />
         )}

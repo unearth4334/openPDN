@@ -31,6 +31,7 @@ from openpdn.application.review_models import (
     NetSummary,
     PolygonGeometry,
     RegionGeometry,
+    TerminalPadSummary,
     TerminalSummary,
     ViaGroupSummary,
     ViaSpanKind,
@@ -197,6 +198,7 @@ class BoardReviewService:
 
         layers, total_thickness = _layer_summaries(board)
         conductive_ids = [layer.id for layer in board.stackup.conductive_layers]
+        pads_by_id = {pad.id: pad for pad in board.pads}
         span_kinds = {via.id: _span_kind(board, via) for via in board.vias}
 
         return BoardReview(
@@ -251,6 +253,16 @@ class BoardReviewService:
                     net_id=terminal.net_id,
                     component_id=terminal.component_id,
                     pad_ids=terminal.pad_ids,
+                    pads=tuple(
+                        TerminalPadSummary(
+                            id=pad.id,
+                            layer_id=pad.layer_id,
+                            x_m=pad.position.x_m,
+                            y_m=pad.position.y_m,
+                        )
+                        for pad_id in terminal.pad_ids
+                        if (pad := pads_by_id.get(pad_id)) is not None
+                    ),
                 )
                 for terminal in board.terminals
             ),

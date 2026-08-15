@@ -43,6 +43,21 @@ MANDATORY_SUPPRESSION_FRACTION: Final = 0.35
 #: element size are numerical slivers and are discarded before assembly.
 SLIVER_AREA_FRACTION: Final = 1e-6
 
+#: Triangles whose area is below this fraction of their longest edge squared
+#: are dropped regardless of absolute size. A P1 element's stiffness scales
+#: as edge^2/area, so an element under this floor (height < 0.02 % of its
+#: longest edge) contributes matrix entries ~5000x the surrounding copper's,
+#: wrecking the conditioning of the direct solve while representing a copper
+#: sliver far below fabrication resolution. Measured on the reference board:
+#: these slivers arise where via-ring vertices graze region boundaries.
+SLIVER_EDGE_AREA_FRACTION: Final = 1e-4
+
+#: Mandatory points closer than this fraction of the local element size to an
+#: existing boundary point are dropped as duplicates (the boundary point
+#: stands in for them). The former nanometre-scale dedup let via-ring points
+#: grazing the copper outline create the degenerate slivers above.
+MANDATORY_BOUNDARY_DEDUP_FRACTION: Final = 0.2
+
 #: Per-region cap on generated mesh points. A region exceeding it fails with a
 #: diagnostic naming the region rather than exhausting memory silently; the
 #: server-side resource budget is enforced above the solver as well.

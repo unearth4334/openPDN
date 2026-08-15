@@ -10,12 +10,14 @@ import type { DeploymentState } from "../hooks/useDeploymentInfo";
 import { type BottomTab, useBoardState } from "../state/boardState";
 import { ConsolePanel } from "./ConsolePanel";
 import { DiagnosticsView } from "./views/DiagnosticsView";
+import { JobsView } from "./views/JobsView";
 import { SourceView } from "./views/SourceView";
 import { StackupView } from "./views/StackupView";
 import { StatsView } from "./views/StatsView";
 import { ViasView } from "./views/ViasView";
 
 const TABS: { id: BottomTab; label: string }[] = [
+  { id: "jobs", label: "Simulations" },
   { id: "stackup", label: "Stackup" },
   { id: "vias", label: "Vias" },
   { id: "diagnostics", label: "Import Diagnostics" },
@@ -47,6 +49,7 @@ export function BottomPanel({ deployment }: { deployment: DeploymentState }) {
         ))}
       </div>
       <div className="tab-panel" role="tabpanel">
+        {state.bottomTab === "jobs" ? <JobsView /> : null}
         {state.bottomTab === "stackup" ? <StackupView /> : null}
         {state.bottomTab === "vias" ? <ViasView /> : null}
         {state.bottomTab === "diagnostics" ? <DiagnosticsView /> : null}

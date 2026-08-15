@@ -9,7 +9,14 @@
  */
 
 import { createContext, type ReactNode, useContext, useMemo, useReducer } from "react";
-import type { BoardReviewResponse, GeometryResponse, GeometryViewName } from "../api/types";
+import type {
+  BoardReviewResponse,
+  GeometryResponse,
+  GeometryViewName,
+  JobResponse,
+  ResultLayerFields,
+  ResultMetrics,
+} from "../api/types";
 
 /** What the user has selected, driving the inspector and viewport highlight. */
 export type Selection =
@@ -18,7 +25,26 @@ export type Selection =
   | { kind: "region"; regionId: string; layerId: string }
   | { kind: "layer"; layerId: string };
 
-export type BottomTab = "stackup" | "vias" | "diagnostics" | "stats" | "source";
+export type BottomTab = "stackup" | "vias" | "diagnostics" | "stats" | "source" | "jobs";
+
+/** Which scalar a result overlay displays. */
+export type ResultFieldKind = "voltage" | "voltage_drop" | "j" | "power";
+
+/** Colour-scale settings for the active result overlay. */
+export interface ResultScale {
+  mode: "auto" | "manual";
+  /** Manual bounds in the field's SI unit; ignored in auto mode. */
+  min: number;
+  max: number;
+  /** Auto mode: clip the top of the range at the 99.5th area percentile of |J|. */
+  clipPercentile: boolean;
+}
+
+/** A completed simulation opened for inspection. */
+export interface ActiveResult {
+  jobId: string;
+  metrics: ResultMetrics;
+}
 
 export type ImportPhase =
   | { status: "empty" }
@@ -54,6 +80,24 @@ export interface BoardState {
   highlightedViaIds: ReadonlySet<string>;
   bottomTab: BottomTab;
   focusRequest: FocusRequest | null;
+  /** Simulation setup drawer visibility. */
+  simulationOpen: boolean;
+  /** Terminals highlighted in the viewport (cross-probing from the setup UI). */
+  highlightedTerminalIds: ReadonlySet<string>;
+  /** True while the viewport is armed to pick a terminal for the setup UI. */
+  terminalPickArmed: boolean;
+  /** The terminal the viewport picked, consumed by the setup UI. */
+  pickedTerminalId: string | null;
+  /** Recent jobs, polled from the API. */
+  jobs: JobResponse[];
+  /** The completed result being inspected, or null. */
+  activeResult: ActiveResult | null;
+  resultField: ResultFieldKind;
+  /** Index into the active result's layer_files. */
+  resultLayerIndex: number;
+  /** Decoded field payloads per layer index. */
+  resultFields: Readonly<Partial<Record<number, ResultLayerFields>>>;
+  resultScale: ResultScale;
 }
 
 export const initialBoardState: BoardState = {
@@ -69,6 +113,16 @@ export const initialBoardState: BoardState = {
   highlightedViaIds: new Set(),
   bottomTab: "stackup",
   focusRequest: null,
+  simulationOpen: false,
+  highlightedTerminalIds: new Set(),
+  terminalPickArmed: false,
+  pickedTerminalId: null,
+  jobs: [],
+  activeResult: null,
+  resultField: "voltage_drop",
+  resultLayerIndex: 0,
+  resultFields: {},
+  resultScale: { mode: "auto", min: 0, max: 1, clipPercentile: true },
 };
 
 export type BoardAction =
@@ -86,7 +140,19 @@ export type BoardAction =
   | { type: "selected"; selection: Selection | null }
   | { type: "via-group-highlighted"; viaIds: string[] }
   | { type: "bottom-tab-changed"; tab: BottomTab }
-  | { type: "focus-requested"; x_m: number; y_m: number; radius_m: number };
+  | { type: "focus-requested"; x_m: number; y_m: number; radius_m: number }
+  | { type: "simulation-panel-toggled"; open?: boolean }
+  | { type: "terminals-highlighted"; terminalIds: string[] }
+  | { type: "terminal-pick-armed"; armed: boolean }
+  | { type: "terminal-picked"; terminalId: string }
+  | { type: "terminal-pick-consumed" }
+  | { type: "jobs-updated"; jobs: JobResponse[] }
+  | { type: "result-opened"; jobId: string; metrics: ResultMetrics }
+  | { type: "result-closed" }
+  | { type: "result-field-changed"; field: ResultFieldKind }
+  | { type: "result-layer-changed"; layerIndex: number }
+  | { type: "result-fields-loaded"; layerIndex: number; fields: ResultLayerFields }
+  | { type: "result-scale-changed"; scale: Partial<ResultScale> };
 
 export function boardReducer(state: BoardState, action: BoardAction): BoardState {
   switch (action.type) {
@@ -160,6 +226,47 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
           radius_m: action.radius_m,
         },
       };
+    case "simulation-panel-toggled": {
+      const open = action.open ?? !state.simulationOpen;
+      return {
+        ...state,
+        simulationOpen: open,
+        // Leaving setup clears its viewport decorations.
+        highlightedTerminalIds: open ? state.highlightedTerminalIds : new Set(),
+        terminalPickArmed: open ? state.terminalPickArmed : false,
+      };
+    }
+    case "terminals-highlighted":
+      return { ...state, highlightedTerminalIds: new Set(action.terminalIds) };
+    case "terminal-pick-armed":
+      return { ...state, terminalPickArmed: action.armed, pickedTerminalId: null };
+    case "terminal-picked":
+      return { ...state, pickedTerminalId: action.terminalId, terminalPickArmed: false };
+    case "terminal-pick-consumed":
+      return { ...state, pickedTerminalId: null };
+    case "jobs-updated":
+      return { ...state, jobs: action.jobs };
+    case "result-opened":
+      return {
+        ...state,
+        activeResult: { jobId: action.jobId, metrics: action.metrics },
+        resultLayerIndex: 0,
+        resultFields: {},
+        resultScale: { ...state.resultScale, mode: "auto" },
+      };
+    case "result-closed":
+      return { ...state, activeResult: null, resultFields: {} };
+    case "result-field-changed":
+      return { ...state, resultField: action.field };
+    case "result-layer-changed":
+      return { ...state, resultLayerIndex: action.layerIndex };
+    case "result-fields-loaded":
+      return {
+        ...state,
+        resultFields: { ...state.resultFields, [action.layerIndex]: action.fields },
+      };
+    case "result-scale-changed":
+      return { ...state, resultScale: { ...state.resultScale, ...action.scale } };
     default:
       return state;
   }

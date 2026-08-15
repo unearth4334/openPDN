@@ -132,14 +132,25 @@ class ComponentSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TerminalPadSummary:
+    """One pad of a terminal, positioned for viewport cross-probing."""
+
+    id: PadId
+    layer_id: LayerId
+    x_m: float
+    y_m: float
+
+
+@dataclass(frozen=True, slots=True)
 class TerminalSummary:
-    """One terminal -- where a future study will attach sources and loads."""
+    """One terminal -- where a study attaches sources and loads."""
 
     id: TerminalId
     name: str
     net_id: NetId
     component_id: ComponentId | None
     pad_ids: tuple[PadId, ...]
+    pads: tuple[TerminalPadSummary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

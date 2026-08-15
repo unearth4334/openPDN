@@ -9,10 +9,16 @@ import type {
   BoardListResponse,
   BoardReviewResponse,
   DevFixtureResponse,
+  EstimateResponse,
   GeometryResponse,
   GeometryViewName,
   HealthResponse,
   InfoResponse,
+  JobResponse,
+  QueueResponse,
+  ResultLayerFields,
+  ResultMetrics,
+  SimulationDraftRequest,
 } from "./types";
 
 /** Same-origin in production; the Vite dev server proxies /api in development. */
@@ -137,4 +143,92 @@ export async function importDevFixture(signal?: AbortSignal): Promise<BoardRevie
     throw await readError(response, `Fixture import failed with HTTP ${response.status}`);
   }
   return (await response.json()) as BoardReviewResponse;
+}
+
+async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
+    });
+  } catch (cause) {
+    throw new ApiError(`Cannot reach the openPDN API at ${API_BASE}${path}`, 0, { cause });
+  }
+  if (!response.ok) {
+    throw await readError(response, `POST ${path} failed with ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** Validate and estimate a simulation draft without queueing it. */
+export function estimateSimulation(
+  boardId: string,
+  draft: SimulationDraftRequest,
+  signal?: AbortSignal,
+): Promise<EstimateResponse> {
+  return postJson(`/boards/${boardId}/simulations/estimate`, draft, signal);
+}
+
+/** Queue a simulation for the orchestrator. */
+export function queueSimulation(
+  boardId: string,
+  draft: SimulationDraftRequest,
+): Promise<QueueResponse> {
+  return postJson(`/boards/${boardId}/simulations`, draft);
+}
+
+/** Recent jobs, newest first. */
+export function fetchJobs(signal?: AbortSignal): Promise<JobResponse[]> {
+  return getJson("/jobs", signal);
+}
+
+/** Request cancellation of a queued or running job. */
+export function cancelJob(jobId: string): Promise<JobResponse> {
+  return postJson(`/jobs/${jobId}/cancel`, {});
+}
+
+/** Full metrics document of a completed result. */
+export function fetchResultMetrics(jobId: string, signal?: AbortSignal): Promise<ResultMetrics> {
+  return getJson(`/results/${jobId}/metrics`, signal);
+}
+
+/**
+ * One layer's mesh and scalar fields, decoded from the documented binary
+ * layout (little-endian: u32 counts, f32 points, u32 triangles, f32 fields).
+ */
+export async function fetchResultFields(
+  jobId: string,
+  layerIndex: number,
+  signal?: AbortSignal,
+): Promise<ResultLayerFields> {
+  const response = await fetch(`${API_BASE}/results/${jobId}/fields/${layerIndex}`, {
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new ApiError(`Field payload ${response.status}`, response.status);
+  }
+  const buffer = await response.arrayBuffer();
+  const header = new Uint32Array(buffer, 0, 2);
+  const pointCount = header[0] ?? 0;
+  const triangleCount = header[1] ?? 0;
+  let offset = 8;
+  const points = new Float32Array(buffer, offset, pointCount * 2);
+  offset += pointCount * 8;
+  const triangles = new Uint32Array(buffer, offset, triangleCount * 3);
+  offset += triangleCount * 12;
+  const voltage = new Float32Array(buffer, offset, pointCount);
+  offset += pointCount * 4;
+  const jMag = new Float32Array(buffer, offset, triangleCount);
+  offset += triangleCount * 4;
+  const power = new Float32Array(buffer, offset, triangleCount);
+  return {
+    points,
+    triangles,
+    voltage_v: voltage,
+    j_a_per_m2: jMag,
+    power_w: power,
+  };
 }

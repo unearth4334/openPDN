@@ -120,14 +120,24 @@ class ComponentResponse(BaseModel):
     terminal_count: int
 
 
+class TerminalPadResponse(BaseModel):
+    """One pad of a terminal, positioned for viewport cross-probing."""
+
+    id: str
+    layer_id: str
+    x_m: float
+    y_m: float
+
+
 class TerminalResponse(BaseModel):
-    """One terminal (future source/load attachment point)."""
+    """One terminal (source/load attachment point)."""
 
     id: str
     name: str
     net_id: str
     component_id: str | None
     pad_ids: list[str]
+    pads: list[TerminalPadResponse]
 
 
 class LayerStatsResponse(BaseModel):
@@ -270,6 +280,15 @@ class BoardReviewResponse(BaseModel):
                         None if terminal.component_id is None else str(terminal.component_id)
                     ),
                     pad_ids=[str(pad_id) for pad_id in terminal.pad_ids],
+                    pads=[
+                        TerminalPadResponse(
+                            id=str(pad.id),
+                            layer_id=str(pad.layer_id),
+                            x_m=pad.x_m,
+                            y_m=pad.y_m,
+                        )
+                        for pad in terminal.pads
+                    ],
                 )
                 for terminal in review.terminals
             ],

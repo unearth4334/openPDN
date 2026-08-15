@@ -38,6 +38,13 @@ if TYPE_CHECKING:
 #: (near-degenerate elements, extreme conductance contrast) worth refusing.
 DIRECT_RESIDUAL_LIMIT = 1e-6
 
+#: Iterative-refinement rounds attempted when the first solve's residual
+#: misses the limit. Refinement reuses the factorisation (one extra
+#: triangular solve per round) and typically recovers several digits on
+#: ill-conditioned but solvable systems; a system that does not improve is
+#: genuinely sick and is still refused.
+MAX_REFINEMENT_ROUNDS = 3
+
 
 @dataclass(frozen=True)
 class Excitation:
@@ -134,16 +141,31 @@ def solve_excitation(problem: SheetProblem, excitation: Excitation) -> Solution:
 
         started = time.perf_counter()
         v_free = factor.solve(rhs)
+
+        scale = max(float(np.linalg.norm(rhs)), 1e-30)
+        residual = float(np.linalg.norm(k_ff @ v_free - rhs)) / scale
+        # Iterative refinement: the factorisation is reused, so each round is
+        # one cheap triangular solve. Stops early once below the limit.
+        rounds = 0
+        while (
+            np.isfinite(residual)
+            and residual > DIRECT_RESIDUAL_LIMIT
+            and rounds < MAX_REFINEMENT_ROUNDS
+        ):
+            correction = factor.solve(rhs - k_ff @ v_free)
+            v_free = v_free + correction
+            improved = float(np.linalg.norm(k_ff @ v_free - rhs)) / scale
+            rounds += 1
+            if improved >= residual:
+                break  # No progress: the system is genuinely sick.
+            residual = improved
         solve_seconds = time.perf_counter() - started
         voltage[free_index] = v_free
 
-        achieved = k_ff @ v_free - rhs
-        scale = max(float(np.linalg.norm(rhs)), 1e-30)
-        residual = float(np.linalg.norm(achieved)) / scale
         if not np.isfinite(residual) or residual > DIRECT_RESIDUAL_LIMIT:
             raise SolverConvergenceError(
-                f"Direct solve residual {residual:.3e} exceeds {DIRECT_RESIDUAL_LIMIT:.0e}; "
-                "the system is severely ill-conditioned",
+                f"Direct solve residual {residual:.3e} exceeds {DIRECT_RESIDUAL_LIMIT:.0e} "
+                f"after {rounds} refinement rounds; the system is severely ill-conditioned",
                 residual=residual,
             )
     else:

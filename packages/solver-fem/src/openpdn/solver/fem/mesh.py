@@ -43,11 +43,13 @@ from shapely.geometry.polygon import orient
 
 from openpdn.solver.fem.controls import (
     INTERIOR_BOUNDARY_CLEARANCE,
+    MANDATORY_BOUNDARY_DEDUP_FRACTION,
     MANDATORY_SUPPRESSION_FRACTION,
     MAX_POINTS_PER_REGION,
     PILOT_SPACING_FRACTION,
     RAY_REACH_IN_TARGET_SIZES,
     SLIVER_AREA_FRACTION,
+    SLIVER_EDGE_AREA_FRACTION,
 )
 from openpdn.solver.fem.errors import MeshGenerationError
 
@@ -544,11 +546,14 @@ def _merge_points(
     """
     kept: list[npt.NDArray[np.float64]] = [boundary]
     if mandatory is not None and len(mandatory) > 0:
-        # Deduplicate mandatory points against the boundary at nanometre scale
-        # (a pad vertex may lie exactly on the copper outline).
+        # Deduplicate mandatory points against the boundary relative to the
+        # local element size: a via-ring vertex grazing the copper outline
+        # would otherwise pair with a boundary point into a degenerate sliver
+        # whose stiffness wrecks the matrix conditioning (see controls).
         b_tree = cKDTree(boundary)
-        distances, _ = b_tree.query(mandatory)
-        mandatory = mandatory[distances > 1e-9]
+        distances, nearest = b_tree.query(mandatory)
+        local_size = boundary_sizes[nearest]
+        mandatory = mandatory[distances > MANDATORY_BOUNDARY_DEDUP_FRACTION * local_size]
     if mandatory is not None and len(mandatory) > 0:
         kept.append(mandatory)
         suppressor = cKDTree(np.vstack([boundary, mandatory]))
@@ -599,7 +604,15 @@ def _filter_triangles(
     tri[flip] = tri[flip][:, [0, 2, 1]]
     area = np.abs(area2) / 2.0
     min_area = SLIVER_AREA_FRACTION * controls.min_size_m**2
-    tri = tri[area > min_area]
+    # Edge-relative sliver rejection: independent of absolute size, an
+    # element with area below this fraction of its longest edge squared is
+    # numerically toxic (stiffness ~ edge^2/area) and physically negligible.
+    edge_a = np.sum((p[:, 1] - p[:, 0]) ** 2, axis=1)
+    edge_b = np.sum((p[:, 2] - p[:, 1]) ** 2, axis=1)
+    edge_c = np.sum((p[:, 0] - p[:, 2]) ** 2, axis=1)
+    longest_sq = np.maximum(edge_a, np.maximum(edge_b, edge_c))
+    keep_area = (area > min_area) & (area > SLIVER_EDGE_AREA_FRACTION * longest_sq)
+    tri = tri[keep_area]
     if len(tri) == 0:
         return tri
     p = points[tri]

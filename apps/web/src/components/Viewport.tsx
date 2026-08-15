@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BoardReviewResponse, ViaResponse } from "../api/types";
 import { useBoardActions } from "../hooks/useBoardActions";
+import { useResultFields } from "../hooks/useResultFields";
 import { formatMm } from "../lib/units";
 import {
   isLayerVisible,
@@ -34,9 +35,17 @@ import {
 } from "../state/boardState";
 import { type Camera, fitBounds, focusOn, pan, screenToWorld, zoomAt } from "../viewer/camera";
 import { resizeCanvasIfNeeded } from "../viewer/canvasSize";
-import { draw, type LayerPaint } from "../viewer/render";
+import { draw, type LayerPaint, type TerminalMarker } from "../viewer/render";
+import {
+  autoRange,
+  buildOverlayBatches,
+  type OverlayBatches,
+  referenceVoltage,
+  triangleScalars,
+} from "../viewer/resultOverlay";
 import { buildScene, hitTest, type Scene } from "../viewer/scene";
 import { OpenBoard } from "./OpenBoard";
+import { ResultControls } from "./ResultControls";
 
 /** Conductive-layer palette slots defined in styles.css. */
 const LAYER_COLOR_SLOTS = 6;
@@ -73,6 +82,8 @@ interface PaintInputs {
   visibleVias: ViaResponse[];
   highlightedViaIds: ReadonlySet<string>;
   selectedViaId: string | null;
+  overlay: OverlayBatches | null;
+  terminalMarkers: TerminalMarker[];
 }
 
 export function Viewport() {
@@ -148,6 +159,60 @@ function BoardCanvas() {
     [review, state],
   );
 
+  // Fetch and decode the active result layer's field payload on demand.
+  useResultFields();
+
+  // Overlay batches rebuild only when result/field/layer/scale change --
+  // never per frame (resultOverlay.ts).
+  const overlay = useMemo((): OverlayBatches | null => {
+    const active = state.activeResult;
+    const fields = state.resultFields[state.resultLayerIndex];
+    if (!active || !fields) {
+      return null;
+    }
+    const scalars = triangleScalars(fields, state.resultField, referenceVoltage(fields));
+    let min: number;
+    let max: number;
+    if (state.resultScale.mode === "manual") {
+      min = state.resultScale.min;
+      max = state.resultScale.max;
+    } else {
+      ({ min, max } = autoRange(
+        fields,
+        scalars,
+        state.resultField,
+        state.resultScale.clipPercentile,
+      ));
+    }
+    return buildOverlayBatches(fields, scalars, min, max);
+  }, [
+    state.activeResult,
+    state.resultFields,
+    state.resultLayerIndex,
+    state.resultField,
+    state.resultScale,
+  ]);
+
+  const terminalMarkers = useMemo((): TerminalMarker[] => {
+    if (!review || state.highlightedTerminalIds.size === 0) {
+      return [];
+    }
+    const markers: TerminalMarker[] = [];
+    for (const terminal of review.terminals) {
+      if (!state.highlightedTerminalIds.has(terminal.id)) {
+        continue;
+      }
+      for (const pad of terminal.pads) {
+        markers.push({
+          x_m: pad.x_m,
+          y_m: pad.y_m,
+          onVisibleLayer: isLayerVisible(state, pad.layer_id),
+        });
+      }
+    }
+    return markers;
+  }, [review, state]);
+
   /** Paint immediately from the latest inputs. Stable for the whole lifetime. */
   const paintNow = useCallback(() => {
     const canvas = canvasRef.current;
@@ -169,12 +234,16 @@ function BoardCanvas() {
       vias: paint.visibleVias,
       highlightedViaIds: paint.highlightedViaIds,
       selectedViaId: paint.selectedViaId,
+      overlay: paint.overlay,
+      overlayDimsCopper: true,
+      terminalMarkers: paint.terminalMarkers,
       colors: {
         profile: rootStyle.getPropertyValue("--viewport-profile").trim(),
         viaRing: rootStyle.getPropertyValue("--viewport-via-ring").trim(),
         viaHole: rootStyle.getPropertyValue("--viewport-via-hole").trim(),
         highlight: rootStyle.getPropertyValue("--viewport-highlight").trim(),
         selection: rootStyle.getPropertyValue("--viewport-selection").trim(),
+        terminalMarker: rootStyle.getPropertyValue("--viewport-terminal-marker").trim(),
       },
     });
   }, []);
@@ -224,6 +293,8 @@ function BoardCanvas() {
       visibleVias,
       highlightedViaIds: state.highlightedViaIds,
       selectedViaId: state.selection?.kind === "via" ? state.selection.viaId : null,
+      overlay,
+      terminalMarkers,
     };
     redraw();
   });
@@ -400,6 +471,37 @@ function BoardCanvas() {
     dragRef.current = null;
     // A click, not a drag: select what is under the pointer.
     if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) < CLICK_SLOP_PX) {
+      // Armed terminal picking (simulation setup) takes priority: the nearest
+      // terminal pad within a generous radius becomes the picked terminal.
+      if (state.terminalPickArmed && review) {
+        const camera = cameraRef.current;
+        const rect = rectRef.current ?? containerRef.current?.getBoundingClientRect() ?? null;
+        if (camera && rect) {
+          const world = screenToWorld(
+            camera,
+            rect.width,
+            rect.height,
+            event.clientX - rect.left,
+            event.clientY - rect.top,
+          );
+          const tolerance = 12 / camera.scale_px_per_m;
+          let bestId: string | null = null;
+          let bestDistance = Number.POSITIVE_INFINITY;
+          for (const terminal of review.terminals) {
+            for (const pad of terminal.pads) {
+              const distance = Math.hypot(pad.x_m - world.x_m, pad.y_m - world.y_m);
+              if (distance <= tolerance && distance < bestDistance) {
+                bestId = terminal.id;
+                bestDistance = distance;
+              }
+            }
+          }
+          if (bestId !== null) {
+            dispatch({ type: "terminal-picked", terminalId: bestId });
+            return;
+          }
+        }
+      }
       const hit = hitAt(event.clientX, event.clientY);
       if (hit?.viaId) {
         dispatch({ type: "selected", selection: { kind: "via", viaId: hit.viaId } });
@@ -473,6 +575,12 @@ function BoardCanvas() {
             Fit
           </button>
         </div>
+        {state.activeResult ? <ResultControls /> : null}
+        {state.terminalPickArmed ? (
+          <div className="viewport__pick-hint" role="status">
+            Click a terminal pad to select it
+          </div>
+        ) : null}
         <div className="viewport__hud">
           <span ref={hudXRef}>X: —</span>
           <span ref={hudYRef}>Y: —</span>

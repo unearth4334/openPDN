@@ -12,7 +12,16 @@
 
 import type { ViaResponse } from "../api/types";
 import type { Camera } from "./camera";
+import type { OverlayBatches } from "./resultOverlay";
 import type { Scene } from "./scene";
+
+/** A terminal pad marker for setup-time cross-probing. */
+export interface TerminalMarker {
+  x_m: number;
+  y_m: number;
+  /** True when the pad's layer is currently visible. */
+  onVisibleLayer: boolean;
+}
 
 export interface LayerPaint {
   layerId: string;
@@ -36,12 +45,19 @@ export interface DrawOptions {
   vias: ViaResponse[];
   highlightedViaIds: ReadonlySet<string>;
   selectedViaId: string | null;
+  /** FEM result overlay batches for the active layer, or null. */
+  overlay: OverlayBatches | null;
+  /** When an overlay is shown, copper is dimmed to context. */
+  overlayDimsCopper: boolean;
+  /** Terminal pads to ring-mark (simulation setup cross-probing). */
+  terminalMarkers: TerminalMarker[];
   colors: {
     profile: string;
     viaRing: string;
     viaHole: string;
     highlight: string;
     selection: string;
+    terminalMarker: string;
   };
 }
 
@@ -81,7 +97,9 @@ export function draw(
     ctx.stroke(scene.profile.path);
   }
 
-  // Copper, bottom layer first so the top layer reads on top.
+  // Copper, bottom layer first so the top layer reads on top. With a result
+  // overlay active the copper drops to context so the field reads clearly.
+  const copperScale = options.overlay && options.overlayDimsCopper ? 0.25 : 1;
   for (let index = options.layerPaints.length - 1; index >= 0; index -= 1) {
     const paint = options.layerPaints[index];
     if (!paint?.visible) {
@@ -94,13 +112,25 @@ export function draw(
     ctx.fillStyle = paint.color;
     for (const [netId, path] of layer.pathsByNet) {
       const dimmed = options.highlightNetId !== null && netId !== options.highlightNetId;
-      ctx.globalAlpha = paint.opacity * (dimmed ? DIM_ALPHA : 1);
+      ctx.globalAlpha = paint.opacity * (dimmed ? DIM_ALPHA : 1) * copperScale;
       ctx.fill(path, "evenodd");
     }
   }
   ctx.globalAlpha = 1;
 
+  if (options.overlay) {
+    // The batches are world-coordinate Path2Ds; the transform is already set.
+    for (let bin = 0; bin < options.overlay.paths.length; bin += 1) {
+      const path = options.overlay.paths[bin];
+      const color = options.overlay.colors[bin];
+      if (!path || !color) continue;
+      ctx.fillStyle = color;
+      ctx.fill(path);
+    }
+  }
+
   drawVias(ctx, options, px);
+  drawTerminalMarkers(ctx, options, px);
   drawRegionOutline(ctx, scene, options.hoveredRegionId, options.colors.highlight, px(1));
   drawRegionOutline(ctx, scene, options.selectedRegionId, options.colors.selection, px(1.5));
 }
@@ -136,6 +166,29 @@ function drawVias(
       ctx.strokeStyle = options.colors.selection;
       ctx.stroke();
     }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTerminalMarkers(
+  ctx: CanvasRenderingContext2D,
+  options: DrawOptions,
+  px: (n: number) => number,
+): void {
+  if (options.terminalMarkers.length === 0) {
+    return;
+  }
+  for (const marker of options.terminalMarkers) {
+    ctx.beginPath();
+    ctx.arc(marker.x_m, marker.y_m, px(7), 0, Math.PI * 2);
+    ctx.lineWidth = px(2);
+    ctx.strokeStyle = options.colors.terminalMarker;
+    ctx.globalAlpha = marker.onVisibleLayer ? 1 : 0.4;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(marker.x_m, marker.y_m, px(2), 0, Math.PI * 2);
+    ctx.fillStyle = options.colors.terminalMarker;
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 }

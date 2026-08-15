@@ -10,6 +10,8 @@
 :root {
   color-scheme: light dark;
 
+  --viewport-terminal-marker: #ff8c1a;
+
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
@@ -858,4 +860,379 @@ tr[aria-selected="true"] {
   overflow-wrap: anywhere;
   height: auto;
   min-height: var(--row-height);
+}
+
+/* --- Simulation setup ----------------------------------------------------------- */
+.simulation-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.simulation-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.sim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sim-field__label {
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.sim-field select,
+.sim-field input,
+.terminal-picker__value {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 3px 6px;
+}
+
+.sim-field__unit-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sim-field__unit-row input {
+  width: 80px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 3px 6px;
+}
+
+.sim-field__unit {
+  color: var(--text-muted);
+}
+
+.sim-loads {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sim-load-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--surface-2);
+  border-radius: 3px;
+}
+
+.sim-accuracy {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sim-accuracy__stop {
+  flex: 1;
+  font: inherit;
+  font-size: var(--font-size-small);
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sim-accuracy__stop[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--surface-0);
+}
+
+.sim-advanced summary {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sim-note {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  margin: 2px 0;
+}
+
+.sim-error {
+  font-size: var(--font-size-small);
+  color: var(--danger);
+  margin: 2px 0;
+}
+
+.sim-estimate {
+  border: 1px solid var(--surface-2);
+  border-radius: 3px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sim-estimate__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-small);
+}
+
+.sim-compute--low {
+  color: var(--source);
+}
+.sim-compute--moderate {
+  color: var(--warning);
+}
+.sim-compute--high,
+.sim-compute--very_high {
+  color: var(--danger);
+}
+
+.sim-queue-button {
+  align-self: stretch;
+}
+
+/* --- Terminal picker ------------------------------------------------------------- */
+.terminal-picker__control {
+  display: flex;
+  gap: 4px;
+}
+
+.terminal-picker__value {
+  flex: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-picker__pick[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--surface-0);
+}
+
+.terminal-picker__tree {
+  border: 1px solid var(--surface-2);
+  border-radius: 3px;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.terminal-picker__tree summary {
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  padding: 2px 0;
+  display: flex;
+  justify-content: space-between;
+}
+
+.terminal-picker__count {
+  color: var(--text-muted);
+}
+
+.terminal-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+}
+
+.terminal-picker__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--font-size-small);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.terminal-picker__item:hover {
+  background: var(--surface-2);
+}
+
+.terminal-picker__item[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--surface-0);
+}
+
+/* --- Jobs table ------------------------------------------------------------------ */
+.jobs-table__state {
+  width: 20px;
+  text-align: center;
+}
+
+.jobs-table__state--running,
+.jobs-table__state--claimed {
+  color: var(--accent);
+}
+.jobs-table__state--completed,
+.jobs-table__state--completed_with_warnings {
+  color: var(--source);
+}
+.jobs-table__state--failed {
+  color: var(--danger);
+}
+.jobs-table__state--cancelled,
+.jobs-table__state--cancelling {
+  color: var(--text-muted);
+}
+
+.jobs-table__row--active {
+  background: var(--surface-1);
+}
+
+.jobs-table__message {
+  color: var(--danger);
+}
+
+/* --- Result overlay controls ----------------------------------------------------- */
+.result-controls {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  font-size: var(--font-size-small);
+}
+
+.result-controls__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.result-controls__title {
+  font-weight: 600;
+}
+
+.result-controls__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.result-controls__field select {
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 4px;
+  max-width: 150px;
+}
+
+.result-controls__clip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.result-legend__ramp {
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+}
+
+.result-legend__labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-small);
+}
+
+.viewport__pick-hint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: var(--surface-0);
+  border-radius: 3px;
+  padding: 4px 10px;
+  font-size: var(--font-size-small);
+}
+
+/* --- Result metrics -------------------------------------------------------------- */
+.result-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.result-headline {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+}
+
+.result-headline__label {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.result-headline__value {
+  font-size: 18px;
+}
+
+.result-warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-small);
+}
+
+.diag {
+  text-transform: uppercase;
+  font-size: 10px;
+  border-radius: 2px;
+  padding: 0 4px;
+}
+
+.diag--warning {
+  background: var(--warning);
+  color: var(--surface-0);
+}
+.diag--error {
+  background: var(--danger);
+  color: var(--surface-0);
+}
+
+.link-button {
+  font: inherit;
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
 }

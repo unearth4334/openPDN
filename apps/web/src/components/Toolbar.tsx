@@ -64,8 +64,27 @@ export function Toolbar({ deployment }: ToolbarProps) {
           </select>
         </label>
       ) : null}
+      {review ? (
+        <button
+          type="button"
+          className="button"
+          aria-pressed={state.simulationOpen}
+          onClick={() => dispatch({ type: "simulation-panel-toggled" })}
+        >
+          New simulation
+        </button>
+      ) : null}
+      {review ? (
+        <button
+          type="button"
+          className="button button--ghost"
+          onClick={() => dispatch({ type: "bottom-tab-changed", tab: "jobs" })}
+        >
+          Queue
+        </button>
+      ) : null}
       <button type="button" className="button" onClick={() => fileInput.current?.click()}>
-        {review ? "Open board…" : "Open board…"}
+        Open board…
       </button>
       <input
         ref={fileInput}
