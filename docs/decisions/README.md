@@ -14,6 +14,7 @@ Short records of decisions that are expensive to reverse. Each has **Status**,
 | [0007](0007-import-pipeline-and-normalisation-boundary.md) | Staged IPC-2581 extraction; geometry normalisation as its own layer | Accepted |
 | [0008](0008-canvas-board-renderer.md) | Board viewport on Canvas 2D behind a scene-model boundary | Accepted |
 | [0009](0009-board-store-and-geometry-transport.md) | In-memory board store keyed by content + pipeline versions; coarse geometry transport | Accepted |
+| [0010](0010-fem-sheet-solver.md) | In-house 2.5-D sheet FEM: filtered-Delaunay meshing, contact-region terminals, exact via annuli, SuperLU direct solve | Accepted |
 
 ## Writing one
 

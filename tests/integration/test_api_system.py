@@ -37,7 +37,7 @@ class TestHealth:
 class TestInfo:
     def test_info_lists_registered_adapters(self, client: TestClient):
         payload = client.get("/api/info").json()
-        assert [solver["name"] for solver in payload["solvers"]] == ["mock"]
+        assert [solver["name"] for solver in payload["solvers"]] == ["fem-2p5d", "mock"]
         assert [importer["name"] for importer in payload["importers"]] == [
             "canonical-json",
             "ipc2581",

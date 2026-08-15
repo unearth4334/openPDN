@@ -28,6 +28,7 @@ SOURCE_ROOTS = (
     REPO_ROOT / "packages" / "geometry" / "src",
     REPO_ROOT / "packages" / "application" / "src",
     REPO_ROOT / "packages" / "solver-mock" / "src",
+    REPO_ROOT / "packages" / "solver-fem" / "src",
     REPO_ROOT / "packages" / "infrastructure" / "src",
     REPO_ROOT / "apps" / "api" / "src",
     REPO_ROOT / "apps" / "cli" / "src",
@@ -123,9 +124,13 @@ LAYER_RULES: tuple[LayerRule, ...] = (
         allow_third_party=True,
     ),
     LayerRule(
+        # Solver adapters may consume normalised copper through the geometry
+        # *contract* -- solver-ready copper is exactly what that contract
+        # exists to describe (ADR-0007, ADR-0010) -- but never through the
+        # concrete Shapely engine, which stays a composition-root decision.
         name="solver adapter",
         prefix="openpdn.solver",
-        allowed_internal=("openpdn.domain", "openpdn.solver"),
+        allowed_internal=("openpdn.domain", "openpdn.solver", "openpdn.geometry.api"),
         allow_third_party=True,
     ),
     LayerRule(

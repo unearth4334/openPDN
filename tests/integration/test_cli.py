@@ -26,11 +26,12 @@ class TestCliCommands:
         assert payload["name"] == "openPDN"
         assert "mock" in payload["solvers"]
 
-    def test_solvers_lists_the_mock_backend(self, capsys: pytest.CaptureFixture[str]):
+    def test_solvers_lists_both_backends(self, capsys: pytest.CaptureFixture[str]):
         assert main(["--json", "solvers"]) == 0
         payload = json.loads(capsys.readouterr().out)
-        assert payload[0]["name"] == "mock"
-        assert payload[0]["fidelity"] == "mock"
+        by_name = {entry["name"]: entry for entry in payload}
+        assert by_name["mock"]["fidelity"] == "mock"
+        assert by_name["fem-2p5d"]["fidelity"] == "sheet_2p5d"
 
     def test_importers_lists_the_canonical_json_reader(self, capsys: pytest.CaptureFixture[str]):
         assert main(["--json", "importers"]) == 0

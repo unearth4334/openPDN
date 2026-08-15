@@ -24,6 +24,7 @@ from openpdn.infrastructure.config import AUTO_DETECT_IMPORTER, Settings, get_se
 from openpdn.infrastructure.registries import InMemoryImporterRegistry, InMemorySolverRegistry
 from openpdn.pcb_import.canonical_json import CanonicalJsonImporter
 from openpdn.pcb_import.ipc2581 import IPC2581Importer
+from openpdn.solver.fem import FemSheetSolver
 from openpdn.solver.mock import MockSolver
 
 if TYPE_CHECKING:
@@ -86,7 +87,7 @@ def _build_solvers() -> list[ElectricalSolver]:
     `SolverDescriptor.available=False` and a reason, so the UI can explain the
     gap instead of hiding it.
     """
-    return [MockSolver()]
+    return [FemSheetSolver(normalizer=ShapelyGeometryNormalizer()), MockSolver()]
 
 
 def _build_importers(settings: Settings) -> list[PCBImporter]:

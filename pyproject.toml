@@ -21,36 +21,32 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
-# Runtime dependencies are deliberately minimal. Remaining numerical
-# dependencies arrive with the first real solver (see the `solver` extra and
-# ADR-0003); shipping them now would only inflate the runtime image.
+# Runtime dependencies are deliberately minimal.
 #
-# Shapely moved from the `solver` extra to runtime with milestone 1: the
-# IPC-2581 importer resolves stroked traces into copper outlines and the
-# geometry normaliser performs the per-(net, layer) Boolean unions, both behind
-# adapter boundaries (ADR-0007).
+# Shapely moved from the `solver` extra to runtime with milestone 1 (importer
+# stroke resolution and per-(net, layer) Boolean unions, ADR-0007). NumPy and
+# SciPy moved to runtime with the first physical solver: the 2.5-D sheet FEM
+# meshes with SciPy's Qhull Delaunay and solves with SuperLU (ADR-0010), both
+# behind the solver adapter boundary.
 dependencies = [
   "fastapi>=0.115",
+  "numpy>=2.1",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
   "python-multipart>=0.0.18",
+  "scipy>=1.14",
   "shapely>=2.0",
   "uvicorn[standard]>=0.32",
 ]
 
 [project.optional-dependencies]
-# Declared, not yet installed by default: the numerical stack the 2.5-D solver
-# will need. Adding an implementation means moving these into `dependencies`.
-solver = [
-  "numpy>=2.1",
-  "scipy>=1.14",
-]
 dev = [
   "httpx>=0.27",
   "mypy>=1.13",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "ruff>=0.8",
+  "scipy-stubs>=1.14",
   "types-shapely>=2.0",
 ]
 
@@ -78,6 +74,7 @@ packages = [
   "packages/geometry/src/openpdn",
   "packages/application/src/openpdn",
   "packages/solver-mock/src/openpdn",
+  "packages/solver-fem/src/openpdn",
   "packages/infrastructure/src/openpdn",
   "apps/api/src/openpdn",
   "apps/cli/src/openpdn",
@@ -92,6 +89,7 @@ dev-mode-dirs = [
   "packages/geometry/src",
   "packages/application/src",
   "packages/solver-mock/src",
+  "packages/solver-fem/src",
   "packages/infrastructure/src",
   "apps/api/src",
   "apps/cli/src",
@@ -115,6 +113,7 @@ src = [
   "packages/application/src",
   "packages/solver-api/src",
   "packages/solver-mock/src",
+  "packages/solver-fem/src",
   "packages/pcb-import/src",
   "packages/geometry/src",
   "packages/infrastructure/src",
@@ -169,6 +168,7 @@ mypy_path = [
   "packages/application/src",
   "packages/solver-api/src",
   "packages/solver-mock/src",
+  "packages/solver-fem/src",
   "packages/pcb-import/src",
   "packages/geometry/src",
   "packages/infrastructure/src",

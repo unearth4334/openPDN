@@ -124,11 +124,38 @@ degenerate mesh element each produce a singular matrix. Diagnose the cause;
 7. Register in `build_container`; add validation cases; add the solver to
    `VALIDATED_SOLVERS` only once those cases pass.
 
+## The fem-2p5d implementation (ADR-0010)
+
+`packages/solver-fem` is the reference implementation of everything above.
+Durable rules for anyone touching it:
+
+* **Meshing** (`mesh.py`) is a graded, filtered Delaunay: never assume an
+  element lies in copper — containment is *tested* (centroid + five samples
+  per edge), and every mesh reports coverage ratio and angle statistics.
+  Boundary spacing is graded by ray-cast local width (`elements_across_feature`
+  across a conductor) *and* clearance (half the slot to the nearest other arm),
+  which is what prevents Delaunay edges bridging slots. Licensing forbids
+  Triangle (non-commercial) and Gmsh (GPL) as hard dependencies — do not
+  reintroduce them casually.
+* **Terminals** are equipotential regions: pad-interior vertices collapse to
+  one DOF via union-find, across layers. Only a pad without an outline may
+  degrade to a point, and that emits `numerics.point_source_singularity`.
+* **Vias** couple through equipotential contact discs at the barrel's outer
+  radius (a single-node coupling grows a log-divergent spreading resistance
+  under refinement) and are stamped as the exact annulus, one segment per
+  consecutive pair of connected conductive layers, lengths from stackup
+  midplane z-distances.
+* **Conservation is part of the result**: current imbalance and
+  terminal-vs-integrated power mismatch above 1e-6 warn, above 1e-3 error.
+  A result with a conservation ERROR must never present as clean.
+* **Do not conflate the linear residual with accuracy.** The residual gate in
+  `solve.py` protects against ill-conditioning; mesh convergence is judged by
+  comparing engineering quantities across refinements, never by the residual.
+
 ## Numerical dependencies
 
-NumPy, SciPy and Shapely are declared in the `solver` extra and are *not*
-runtime dependencies yet. The first real solver moves them into `dependencies`.
-They remain invisible to the domain and the application layer.
+NumPy, SciPy and Shapely are runtime dependencies (ADR-0010). They remain
+invisible to the domain and the application layer.
 
 Sparse assembly: build COO triplets and convert to CSR once; do not assemble
 into a dense matrix "for now". Prefer a direct sparse factorisation for the

@@ -102,11 +102,25 @@ class MeshSettings:
 
     Solver adapters translate these into backend-specific options; backend
     options never appear here (ADR-0003).
+
+    Attributes:
+        target_element_size: Upper bound on element edge length in wide copper.
+        minimum_element_size: Lower bound the mesher may not refine below;
+            `None` lets the mesher derive one from the target.
+        refine_around_terminals: Whether terminal pads receive local
+            refinement beyond the width-based sizing.
+        elements_across_feature: How many elements a narrow conductor should
+            receive across its local width. This -- not raw element size -- is
+            what controls discretisation error in neck-downs and traces.
+        growth_rate: How fast element size may grow per unit distance from a
+            refined boundary, dimensionless. Lower is smoother and denser.
     """
 
     target_element_size: Quantity
     minimum_element_size: Quantity | None = None
     refine_around_terminals: bool = True
+    elements_across_feature: int = 4
+    growth_rate: float = 0.7
 
     def __post_init__(self) -> None:
         """Validate element sizing."""
@@ -119,6 +133,10 @@ class MeshSettings:
                 raise InvalidStudyError(
                     "Minimum element size must be positive and no larger than the target"
                 )
+        if self.elements_across_feature < 1:
+            raise InvalidStudyError("Elements-across-feature must be at least 1")
+        if not 0.0 < self.growth_rate <= 2.0:
+            raise InvalidStudyError("Mesh growth rate must be in (0, 2]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +172,10 @@ class AnalysisStudy:
     via_model: ViaModel = ViaModel.LUMPED_CONDUCTANCE
     mesh: MeshSettings | None = None
     thickness_overrides: tuple[LayerThicknessOverride, ...] = field(default_factory=tuple)
+    #: Barrel plating thickness to use for vias whose fabrication data does not
+    #: state one. Lives on the study -- the board records only what was
+    #: imported -- and solvers must report its use as an assumption.
+    via_plating_thickness: Quantity | None = None
 
     def __post_init__(self) -> None:
         """Validate internal consistency of the study."""
@@ -172,6 +194,11 @@ class AnalysisStudy:
             raise InvalidStudyError(f"Study {self.id!r} drives a terminal from two sources")
         if self.temperature is not None and self.temperature.require_unit(KELVIN) <= 0.0:
             raise InvalidStudyError("Study temperature must be above absolute zero")
+        if (
+            self.via_plating_thickness is not None
+            and self.via_plating_thickness.require_unit(METRE) <= 0.0
+        ):
+            raise InvalidStudyError("Via plating thickness must be positive")
 
     @cached_property
     def net_id_set(self) -> frozenset[NetId]:

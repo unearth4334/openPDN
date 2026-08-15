@@ -21,7 +21,12 @@ pytestmark = pytest.mark.validation
 #: Solvers whose numerical results have been checked against closed-form
 #: references. Add a name here only together with the validation cases that
 #: earn it, and record the tolerances those cases use.
-VALIDATED_SOLVERS: frozenset[str] = frozenset()
+#:
+#: fem-2p5d -- validated by `test_fem_validation.py`: straight trace within
+#: 0.5 % (converging to <0.1 %), parallel/series combinations, exact annular
+#: via barrels (1e-9), four-layer stacks, linearity (1e-9), current and power
+#: conservation (1e-8), disconnected-copper refusal.
+VALIDATED_SOLVERS: frozenset[str] = frozenset({"fem-2p5d"})
 
 
 def test_every_physical_solver_has_been_validated(container: Container) -> None:
