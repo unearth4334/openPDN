@@ -528,6 +528,11 @@ body {
 }
 
 /* --- Viewport HUD ----------------------------------------------------------------- */
+.viewport__stage {
+  position: absolute;
+  inset: 0;
+}
+
 .viewport__canvas {
   position: absolute;
   inset: 0;

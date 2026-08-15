@@ -70,7 +70,33 @@ net list ⇄ viewport ⇄ via tables ⇄ stackup ⇄ inspector
 * Hit-testing runs on raw rings (bbox reject + even-odd), scanning visible
   layers top-first — it must work headless, because that is how it is tested.
 
-## 5. Performance rules
+## 5. Never blank the canvas
+
+Assigning `canvas.width` or `canvas.height` **resets the bitmap to transparent
+black, even when the assigned value is unchanged** — the HTML specification
+requires it. Deferring the repaint to `requestAnimationFrame` then composites
+one or more empty frames, which the user sees as flicker.
+
+Two rules follow, and both have regression tests:
+
+* Size the backing store only through `viewer/canvasSize.ts`, which assigns
+  only on a real size change and reports whether it reallocated. When it did,
+  repaint **synchronously** rather than waiting for a frame.
+* Keep `paintNow`/`redraw` stable (`useCallback` with no changing deps) and
+  feed them through a ref that a dependency-free effect refreshes. Anything
+  that runs per pointer-move must not change their identity, or every effect
+  that depends on them — including the one that sizes the canvas — re-runs on
+  every mouse move.
+
+Symptom to recognise: flicker that tracks pointer motion rather than data
+changes. `.local/flicker-probe.py` measures it directly by counting bitmap
+resets and fully-transparent composited frames.
+
+Continuous readouts (the X/Y coordinate HUD) are written to their DOM nodes
+directly. Only the *identity* of the hovered object is React state, so
+sweeping across copper re-renders nothing.
+
+## 6. Performance rules
 
 Budget: 60 fps pan/zoom on the reference board (~640 normalised polygons,
 ~46 000 vertices) with obvious headroom.
@@ -79,14 +105,15 @@ Budget: 60 fps pan/zoom on the reference board (~640 normalised polygons,
   toggles, net selection and tab switches must cause zero network traffic and
   zero scene rebuilds.
 * Repaints go through one `requestAnimationFrame` gate; input events never
-  draw synchronously.
+  draw synchronously. The one deliberate exception is a resize that
+  reallocated the bitmap — see section 5.
 * Never create per-polygon React elements. The scene batches one `Path2D` per
   `(layer, net)`; a full repaint is a handful of `fill()` calls.
 * If a board makes this architecture visibly struggle, profile first; the
   planned answer is a WebGL draw backend behind the same `draw()` seam, with
   its own ADR.
 
-## 6. Future scalar fields
+## 7. Future scalar fields
 
 Voltage, current density and via current will render in this viewport. The
 decisions already made for them:
