@@ -472,11 +472,15 @@ body {
 
 /* --- Via stack columns --------------------------------------------------------- */
 /* Toggle row (row 1) and one row per conductive layer (row 2+), both sized to
-   `--row-height` so via bars line up exactly with the layer rows beside them. */
+   `--row-height` so via barrels line up exactly with the layer rows beside
+   them. `stretch` (the grid default, spelled out because the rest of this
+   file leans on `center`) is load-bearing: the ring/shaft pseudo-elements
+   below are positioned against the cell's own box, which needs the row's
+   full height to anchor to, not just its content's. */
 .layers-grid {
   display: grid;
   grid-auto-rows: var(--row-height);
-  align-items: center;
+  align-items: stretch;
   column-gap: 2px;
 }
 
@@ -487,26 +491,47 @@ body {
 }
 
 .via-stack__cell {
-  height: 100%;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
+  position: relative;
 }
 
+/* The drilled barrel: a thin line running the height of the cell, so a
+   multi-layer span reads as one continuous shaft rather than isolated rings. */
 .via-stack__cell--filled::before {
   content: "";
-  width: 6px;
-  margin: 0 auto;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
   background: var(--viewport-via-ring);
 }
 
-/* Round the bar's exposed end at the top and bottom of a via's span, so a
-   stack reads as one continuous barrel rather than a column of ticks. */
+/* Trim the shaft at the ends of the span so it starts and ends at the
+   outermost ring instead of overshooting into the row beyond it. */
 .via-stack__cell--top::before {
-  border-radius: 3px 3px 0 0;
+  top: 50%;
 }
 .via-stack__cell--bottom::before {
-  border-radius: 0 0 3px 3px;
+  bottom: 50%;
+}
+
+/* The annular ring: this via's copper at this layer. Same ring/hole colours
+   as the viewport's own via rendering, just miniaturised. */
+.via-stack__cell--filled::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--viewport-via-hole) 0 35%,
+    var(--viewport-via-ring) 35% 100%
+  );
 }
 
 /* --- Net list ------------------------------------------------------------------ */
