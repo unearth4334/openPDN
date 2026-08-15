@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Four-conductive-layer IPC-2581B stackup, hand-written for openPDN tests.
+
+  Exercises: stackup ordering by sequence, copper/dielectric/soldermask layer
+  classification, per-layer thickness import, material name references, and
+  the skipping of zero-thickness non-physical layers (paste, legend).
+
+  One deliberate gap: "In2" has no thickness, so the missing-thickness
+  diagnostic and the partial copper-thickness capability stay exercised.
+-->
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Ecad name="four-layer-stackup">
+    <CadHeader units="MILLIMETER">
+      <Spec name="Top"><General type="MATERIAL"><Property text="Copper"/></General></Spec>
+      <Spec name="Core"><General type="MATERIAL"><Property text="FR4"/></General></Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="Paste" layerFunction="PASTEMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="Mask Top" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="Top" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="Prepreg 1" layerFunction="DIELPREG" side="NONE" polarity="POSITIVE"/>
+      <Layer name="In1" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="Core" layerFunction="DIELCORE" side="NONE" polarity="POSITIVE"/>
+      <Layer name="In2" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="Prepreg 2" layerFunction="DIELPREG" side="NONE" polarity="POSITIVE"/>
+      <Layer name="Bottom" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Mask Bottom" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Legend" layerFunction="LEGEND" side="TOP" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="1.6096" whereMeasured="LAMINATE">
+        <StackupGroup name="all" thickness="1.6096">
+          <StackupLayer layerOrGroupRef="Paste" thickness="0" sequence="1"/>
+          <StackupLayer layerOrGroupRef="Mask Top" thickness="0.02" sequence="2"/>
+          <StackupLayer layerOrGroupRef="Top" thickness="0.035" sequence="3"/>
+          <StackupLayer layerOrGroupRef="Prepreg 1" thickness="0.18" sequence="4"/>
+          <StackupLayer layerOrGroupRef="In1" thickness="0.0348" sequence="5"/>
+          <StackupLayer layerOrGroupRef="Core" thickness="1.0" sequence="6"/>
+          <StackupLayer layerOrGroupRef="In2" sequence="7"/>
+          <StackupLayer layerOrGroupRef="Prepreg 2" thickness="0.18" sequence="8"/>
+          <StackupLayer layerOrGroupRef="Bottom" thickness="0.035" sequence="9"/>
+          <StackupLayer layerOrGroupRef="Mask Bottom" thickness="0.02" sequence="10"/>
+          <StackupLayer layerOrGroupRef="Legend" thickness="0" sequence="11"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="four-layer-stackup">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Top">
+          <Set net="VCC">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="1" y="1"/>
+                  <PolyStepSegment x="19" y="1"/>
+                  <PolyStepSegment x="19" y="9"/>
+                  <PolyStepSegment x="1" y="9"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="In1">
+          <Set net="GND">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="1" y="1"/>
+                  <PolyStepSegment x="19" y="1"/>
+                  <PolyStepSegment x="19" y="9"/>
+                  <PolyStepSegment x="1" y="9"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="In2">
+          <Set net="GND">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="1" y="1"/>
+                  <PolyStepSegment x="19" y="1"/>
+                  <PolyStepSegment x="19" y="9"/>
+                  <PolyStepSegment x="1" y="9"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Bottom">
+          <Set net="VCC">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="1" y="1"/>
+                  <PolyStepSegment x="19" y="1"/>
+                  <PolyStepSegment x="19" y="9"/>
+                  <PolyStepSegment x="1" y="9"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

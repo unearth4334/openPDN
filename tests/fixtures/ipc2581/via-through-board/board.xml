@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Via spans, hand-written for openPDN tests.
+
+  Exercises: a plated through via (Top to Bottom), a blind via (Top to In1)
+  and a buried via (In1 to In2), each with a drill diameter, a padstack net
+  and circular lands referenced from the standard dictionary. Also one
+  component pad with a PinRef, producing a pad, a terminal and a component
+  link.
+
+  Deliberate gaps: no plating thickness and no finished hole size anywhere,
+  so the missing-via-plating diagnostics stay exercised.
+-->
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="LAND_600"><Circle diameter="0.6"/></EntryStandard>
+      <EntryStandard id="PIN_RECT"><RectCenter width="1.0" height="0.5"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad name="via-through-board">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Top" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="D1" layerFunction="DIELPREG" side="NONE" polarity="POSITIVE"/>
+      <Layer name="In1" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="D2" layerFunction="DIELCORE" side="NONE" polarity="POSITIVE"/>
+      <Layer name="In2" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="D3" layerFunction="DIELPREG" side="NONE" polarity="POSITIVE"/>
+      <Layer name="Bottom" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="1.2">
+        <StackupGroup name="all" thickness="1.2">
+          <StackupLayer layerOrGroupRef="Top" thickness="0.035" sequence="1"/>
+          <StackupLayer layerOrGroupRef="D1" thickness="0.2" sequence="2"/>
+          <StackupLayer layerOrGroupRef="In1" thickness="0.035" sequence="3"/>
+          <StackupLayer layerOrGroupRef="D2" thickness="0.66" sequence="4"/>
+          <StackupLayer layerOrGroupRef="In2" thickness="0.035" sequence="5"/>
+          <StackupLayer layerOrGroupRef="D3" thickness="0.2" sequence="6"/>
+          <StackupLayer layerOrGroupRef="Bottom" thickness="0.035" sequence="7"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="via-through-board">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+        <PadStack net="VCC">
+          <LayerHole name="V1" diameter="0.3" platingStatus="VIA" x="2" y="2">
+            <Span fromLayer="Top" toLayer="Bottom"/>
+          </LayerHole>
+          <LayerPad layerRef="Top">
+            <Location x="2" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+          <LayerPad layerRef="Bottom">
+            <Location x="2" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+        </PadStack>
+        <PadStack net="VCC">
+          <LayerHole name="V2" diameter="0.1" platingStatus="VIA" x="4" y="2">
+            <Span fromLayer="Top" toLayer="In1"/>
+          </LayerHole>
+          <LayerPad layerRef="Top">
+            <Location x="4" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+          <LayerPad layerRef="In1">
+            <Location x="4" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+        </PadStack>
+        <PadStack net="GND">
+          <LayerHole name="V3" diameter="0.2" platingStatus="VIA" x="6" y="2">
+            <Span fromLayer="In1" toLayer="In2"/>
+          </LayerHole>
+          <LayerPad layerRef="In1">
+            <Location x="6" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+          <LayerPad layerRef="In2">
+            <Location x="6" y="2"/>
+            <StandardPrimitiveRef id="LAND_600"/>
+          </LayerPad>
+        </PadStack>
+        <PadStack net="VCC">
+          <LayerPad layerRef="Top">
+            <Location x="8" y="2"/>
+            <StandardPrimitiveRef id="PIN_RECT"/>
+            <PinRef componentRef="U1" pin="1"/>
+          </LayerPad>
+        </PadStack>
+        <Component refDes="U1" packageRef="X" layerRef="Top" part="loadchip">
+          <Location x="8" y="2"/>
+        </Component>
+        <LayerFeature layerRef="Top">
+          <Set net="VCC">
+            <Features>
+              <Line startX="2" startY="2" endX="8" endY="2">
+                <LineDesc lineEnd="ROUND" lineWidth="0.4" lineProperty="SOLID"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

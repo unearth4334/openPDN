@@ -1,0 +1,34 @@
+{
+  "name": "@openpdn/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "openPDN engineering UI",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src",
+    "format": "biome check --write src"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "jsdom": "^30.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.0"
+  }
+}

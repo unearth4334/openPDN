@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copper geometry primitives, hand-written for openPDN tests.
+
+  Exercises, with hand-checkable areas (all in millimetres):
+
+  * a plane contour with a rectangular void (Contour + Cutout):
+    10 x 10 minus 2 x 2 = 96 mm^2
+  * a round-ended stroked trace: 8 long, 1 wide = 8 + pi/4 mm^2
+  * a full-circle arc stroke (start == end): an annulus, centre (15, 15),
+    radius 2, width 0.5 = pi * ((2.25)^2 - (1.75)^2) = 2*pi mm^2
+  * a flashed rectangle rotated 90 degrees: 4 x 1 becomes 1 wide x 4 tall
+  * two disjoint copper islands on one net (the two GND squares)
+  * unassigned copper via the placeholder net name "No Net"
+-->
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="RECT_4X1"><RectCenter width="4" height="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad name="plane-and-trace">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Top" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="0.035">
+        <StackupGroup name="all" thickness="0.035">
+          <StackupLayer layerOrGroupRef="Top" thickness="0.035" sequence="1"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="plane-and-trace">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="20"/>
+            <PolyStepSegment x="0" y="20"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Top">
+          <Set net="VCC">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="0" y="0"/>
+                  <PolyStepSegment x="10" y="0"/>
+                  <PolyStepSegment x="10" y="10"/>
+                  <PolyStepSegment x="0" y="10"/>
+                </Polygon>
+                <Cutout>
+                  <PolyBegin x="4" y="4"/>
+                  <PolyStepSegment x="6" y="4"/>
+                  <PolyStepSegment x="6" y="6"/>
+                  <PolyStepSegment x="4" y="6"/>
+                </Cutout>
+              </Contour>
+            </Features>
+            <Features>
+              <Line startX="12" startY="5" endX="20" endY="5">
+                <LineDesc lineEnd="ROUND" lineWidth="1" lineProperty="SOLID"/>
+              </Line>
+            </Features>
+            <Features>
+              <Arc startX="17" startY="15" endX="17" endY="15" centerX="15" centerY="15"
+                   clockwise="false">
+                <LineDesc lineEnd="ROUND" lineWidth="0.5" lineProperty="SOLID"/>
+              </Arc>
+            </Features>
+          </Set>
+          <Set net="GND">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="25" y="1"/>
+                  <PolyStepSegment x="28" y="1"/>
+                  <PolyStepSegment x="28" y="4"/>
+                  <PolyStepSegment x="25" y="4"/>
+                </Polygon>
+              </Contour>
+            </Features>
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="31" y="1"/>
+                  <PolyStepSegment x="34" y="1"/>
+                  <PolyStepSegment x="34" y="4"/>
+                  <PolyStepSegment x="31" y="4"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+          <Set net="No Net">
+            <Features>
+              <Xform rotation="90"/>
+              <Location x="30" y="15"/>
+              <StandardPrimitiveRef id="RECT_4X1"/>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

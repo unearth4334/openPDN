@@ -1,0 +1,45 @@
+# Example deployment stack.
+#
+# Copy this into your orchestrator (Portainer, Compose, whatever you run) and
+# fill in the tag. Deployments run a pre-built image from GHCR; they never
+# build from source, so a deployed container is exactly the artefact CI tested.
+#
+#   image: ghcr.io/<owner>/openpdn:<tag>     <- correct
+#   build: .                                  <- wrong for a deployment
+#
+# Prefer an immutable digest or commit SHA tag over `latest`, so a redeploy
+# cannot silently change what runs.
+#
+# Environment-specific values (hosts, credentials, endpoint ids) belong in a
+# gitignored `.deploy/` directory or your orchestrator's own secret store --
+# never in this file and never in this repository.
+services:
+  openpdn:
+    image: ghcr.io/OWNER/openpdn:sha-0000000
+    ports:
+      - "8000:8000"
+    environment:
+      OPENPDN_ENVIRONMENT: production
+      OPENPDN_LOG_LEVEL: INFO
+      OPENPDN_LOG_FORMAT: json
+      OPENPDN_SOLVER: mock
+    volumes:
+      - openpdn-data:/var/lib/openpdn
+      - openpdn-cache:/var/cache/openpdn
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request,sys;sys.exit(0 if
+          urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=3).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  openpdn-data:
+  openpdn-cache:

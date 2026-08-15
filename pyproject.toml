@@ -1,0 +1,208 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openpdn"
+version = "0.0.1"
+description = "Format-independent PCB DC electrical analysis platform (IR drop, current density, resistance)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "openPDN contributors" }]
+keywords = ["pcb", "ipc-2581", "fem", "ir-drop", "power-delivery-network", "electrical-analysis"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Manufacturing",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+
+# Runtime dependencies are deliberately minimal. Remaining numerical
+# dependencies arrive with the first real solver (see the `solver` extra and
+# ADR-0003); shipping them now would only inflate the runtime image.
+#
+# Shapely moved from the `solver` extra to runtime with milestone 1: the
+# IPC-2581 importer resolves stroked traces into copper outlines and the
+# geometry normaliser performs the per-(net, layer) Boolean unions, both behind
+# adapter boundaries (ADR-0007).
+dependencies = [
+  "fastapi>=0.115",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "python-multipart>=0.0.18",
+  "shapely>=2.0",
+  "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+# Declared, not yet installed by default: the numerical stack the 2.5-D solver
+# will need. Adding an implementation means moving these into `dependencies`.
+solver = [
+  "numpy>=2.1",
+  "scipy>=1.14",
+]
+dev = [
+  "httpx>=0.27",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.8",
+  "types-shapely>=2.0",
+]
+
+[project.scripts]
+openpdn = "openpdn.cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/unearth4334/openPDN"
+Source = "https://github.com/unearth4334/openPDN"
+Issues = "https://github.com/unearth4334/openPDN/issues"
+
+# ---------------------------------------------------------------------------
+# Build configuration
+#
+# The monorepo ships as a single distribution whose modules live under the
+# PEP 420 namespace package `openpdn`. Each architectural layer owns one
+# source root; the layering is enforced by tests/unit/test_architecture_boundaries.py,
+# not by separate wheels (see ADR-0001).
+# ---------------------------------------------------------------------------
+[tool.hatch.build.targets.wheel]
+packages = [
+  "packages/domain/src/openpdn",
+  "packages/solver-api/src/openpdn",
+  "packages/pcb-import/src/openpdn",
+  "packages/geometry/src/openpdn",
+  "packages/application/src/openpdn",
+  "packages/solver-mock/src/openpdn",
+  "packages/infrastructure/src/openpdn",
+  "apps/api/src/openpdn",
+  "apps/cli/src/openpdn",
+]
+# Editable installs need every source root on sys.path explicitly: the layers
+# share the `openpdn` namespace package, and a single generated path entry
+# would shadow all but one of them.
+dev-mode-dirs = [
+  "packages/domain/src",
+  "packages/solver-api/src",
+  "packages/pcb-import/src",
+  "packages/geometry/src",
+  "packages/application/src",
+  "packages/solver-mock/src",
+  "packages/infrastructure/src",
+  "apps/api/src",
+  "apps/cli/src",
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["packages/", "apps/api/", "apps/cli/", "tests/", "README.md", "LICENSE"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Ruff formats Python code blocks inside Markdown. Documentation snippets are
+# illustrative -- some deliberately show code we reject -- so they are not the
+# formatter's to own.
+extend-exclude = ["*.md"]
+src = [
+  "packages/domain/src",
+  "packages/application/src",
+  "packages/solver-api/src",
+  "packages/solver-mock/src",
+  "packages/pcb-import/src",
+  "packages/geometry/src",
+  "packages/infrastructure/src",
+  "apps/api/src",
+  "apps/cli/src",
+  "tests",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle / pyflakes
+  "I",                # import sorting
+  "UP",               # pyupgrade
+  "B",                # bugbear
+  "SIM",              # simplify
+  "C4",               # comprehensions
+  "RUF",              # ruff-specific
+  "ANN",              # missing annotations
+  "D",                # docstrings
+  "S",                # bandit-style security checks
+  "PTH",              # prefer pathlib
+  "TID",              # tidy imports
+  "N",                # pep8-naming
+]
+ignore = [
+  "D203",   # conflicts with D211
+  "D213",   # conflicts with D212
+  "ANN401", # allow typing.Any where deliberately used
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: docstrings on every case would be noise, `assert` is the point, and
+# `-> None` on a test function tells the reader nothing.
+"tests/**" = ["D100", "D101", "D102", "D103", "D104", "S101", "ANN"]
+"**/__init__.py" = ["D104"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = [
+  ".",
+  "packages/domain/src",
+  "packages/application/src",
+  "packages/solver-api/src",
+  "packages/solver-mock/src",
+  "packages/pcb-import/src",
+  "packages/geometry/src",
+  "packages/infrastructure/src",
+  "apps/api/src",
+  "apps/cli/src",
+]
+files = ["packages", "apps/api/src", "apps/cli/src", "tests"]
+
+# Tests are type-checked, but a test function's `-> None` is noise: the strict
+# annotation requirements apply to the code under test, not to the cases.
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "unit: fast, pure-code tests with no I/O",
+  "integration: exercises an adapter, the HTTP API, the CLI or the filesystem",
+  "validation: numerical result checked against a closed-form analytical answer",
+  "slow: takes more than a couple of seconds",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["openpdn"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+  "class .*\\(Protocol\\):",
+]

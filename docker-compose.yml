@@ -1,0 +1,25 @@
+# Local development stack.
+#
+# Builds from source, which is what you want on a workstation and what you do
+# NOT want in a deployment: deployed stacks run pre-built GHCR images. See
+# docker-compose.example.yml.
+services:
+  openpdn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openpdn:dev
+    ports:
+      - "8000:8000"
+    environment:
+      OPENPDN_ENVIRONMENT: development
+      OPENPDN_LOG_LEVEL: DEBUG
+      OPENPDN_LOG_FORMAT: text
+    volumes:
+      - openpdn-data:/var/lib/openpdn
+      - openpdn-cache:/var/cache/openpdn
+    restart: unless-stopped
+
+volumes:
+  openpdn-data:
+  openpdn-cache:

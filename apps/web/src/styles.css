@@ -1,0 +1,726 @@
+/*
+ * openPDN is an engineering application, not a dashboard.
+ *
+ * Density over decoration: compact type, thin borders, no card shadows, no
+ * decorative animation. The viewport is the workspace; panels are instruments
+ * around it. Numbers are monospaced and selectable so they can be copied into
+ * a report or a spreadsheet.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --font-size-base: 13px;
+  --font-size-small: 11px;
+  --row-height: 22px;
+
+  --surface-0: #ffffff;
+  --surface-1: #f4f5f7;
+  --surface-2: #e9ebef;
+  --border: #ccd0d6;
+  --text: #14181d;
+  --text-muted: #5a636e;
+
+  --accent: #0b62c4;
+  --source: #1a7f37;
+  --load: #b4451a;
+  --warning: #a86100;
+  --danger: #b3261e;
+
+  /* Provenance colours. These are semantic, not decorative: an assumed value
+     must be visually distinct from an imported one everywhere it appears. */
+  --provenance-imported: #0b62c4;
+  --provenance-configured: #1a7f37;
+  --provenance-assumed: #a86100;
+  --provenance-derived: #5a4bbf;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-0: #14171c;
+    --surface-1: #191d23;
+    --surface-2: #21262e;
+    --border: #333a44;
+    --text: #e6e9ee;
+    --text-muted: #98a1ae;
+
+    --accent: #62a8ff;
+    --source: #4cc26a;
+    --load: #ff9a62;
+    --warning: #e2a33c;
+    --danger: #ff6b60;
+
+    --provenance-imported: #62a8ff;
+    --provenance-configured: #4cc26a;
+    --provenance-assumed: #e2a33c;
+    --provenance-derived: #a596ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--font-size-base);
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--surface-1);
+}
+
+/* Numeric output is monospaced and tabular so columns of values line up and
+   digits do not shift width between renders. */
+.numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}
+
+.unit {
+  color: var(--text-muted);
+  margin-left: 0.25em;
+}
+
+/* --- Application shell ---------------------------------------------------- */
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  height: 34px;
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar__title {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.toolbar__spacer {
+  flex: 1;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 220px 1fr 280px;
+  min-height: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-0);
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+
+.panel--right {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+.panel__header {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel__body {
+  padding: 6px 8px;
+}
+
+.empty-state {
+  padding: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+/* --- Viewport -------------------------------------------------------------- */
+.viewport {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 19px, var(--surface-2) 19px 20px),
+    repeating-linear-gradient(90deg, transparent 0 19px, var(--surface-2) 19px 20px),
+    var(--surface-1);
+  min-height: 0;
+}
+
+.viewport__placeholder {
+  max-width: 46ch;
+  padding: 12px 16px;
+  text-align: center;
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+}
+
+/* --- Tables ---------------------------------------------------------------- */
+.property-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.property-table th,
+.property-table td {
+  height: var(--row-height);
+  padding: 1px 6px;
+  text-align: left;
+  font-weight: 400;
+  border-bottom: 1px solid var(--surface-2);
+  white-space: nowrap;
+}
+
+.property-table th {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.property-table td.value {
+  text-align: right;
+}
+
+/* --- Badges ---------------------------------------------------------------- */
+.badge {
+  display: inline-block;
+  padding: 0 4px;
+  font-size: var(--font-size-small);
+  line-height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  text-transform: lowercase;
+}
+
+.badge--imported {
+  color: var(--provenance-imported);
+}
+.badge--configured {
+  color: var(--provenance-configured);
+}
+.badge--assumed {
+  color: var(--provenance-assumed);
+}
+.badge--derived {
+  color: var(--provenance-derived);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.status--ok .status__dot {
+  background: var(--source);
+}
+.status--error .status__dot {
+  background: var(--danger);
+}
+
+.capability {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.capability__status {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.capability__status--implemented {
+  color: var(--source);
+}
+
+/* --- Console --------------------------------------------------------------- */
+.console {
+  height: 132px;
+  background: var(--surface-0);
+  border-top: 1px solid var(--border);
+  overflow: auto;
+}
+
+.console__line {
+  display: flex;
+  gap: 8px;
+  padding: 1px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+}
+
+.console__severity--warning {
+  color: var(--warning);
+}
+.console__severity--error {
+  color: var(--danger);
+}
+.console__severity--info {
+  color: var(--text-muted);
+}
+
+/* --- Layer colours ----------------------------------------------------------
+   Semantic per stackup position, assigned in order to conductive layers.
+   Read by the canvas renderer via getComputedStyle; never hard-coded in TS. */
+:root {
+  --layer-color-0: #c94f2e; /* top */
+  --layer-color-1: #2e7dc9; /* inner 1 */
+  --layer-color-2: #2ea86a; /* inner 2 */
+  --layer-color-3: #b98a2b; /* bottom */
+  --layer-color-4: #8a5bc9;
+  --layer-color-5: #c92e86;
+  --viewport-profile: #7a828d;
+  --viewport-via-ring: #d0d4da;
+  --viewport-via-hole: #14181d;
+  --viewport-highlight: #ffd23e;
+  --viewport-selection: #62e0ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --layer-color-0: #ff7a52;
+    --layer-color-1: #62a8ff;
+    --layer-color-2: #4cc26a;
+    --layer-color-3: #e2b23c;
+    --layer-color-4: #a98aff;
+    --layer-color-5: #ff6bb5;
+    --viewport-profile: #98a1ae;
+    --viewport-via-ring: #e6e9ee;
+    --viewport-via-hole: #14171c;
+    --viewport-highlight: #ffd23e;
+    --viewport-selection: #62e0ff;
+  }
+}
+
+/* --- Toolbar additions ------------------------------------------------------ */
+.toolbar__board {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar__source {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.button {
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--surface-2);
+}
+
+.button--primary {
+  color: var(--surface-0);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.button--ghost {
+  background: transparent;
+}
+
+.select {
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+
+/* Readiness chip: colour plus text plus symbol, never colour alone. */
+.readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-small);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 7px;
+  cursor: pointer;
+  background: var(--surface-1);
+  color: var(--text);
+}
+
+.readiness__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.readiness--ready .readiness__dot {
+  background: var(--source);
+}
+.readiness--ready_with_assumptions .readiness__dot {
+  background: var(--warning);
+}
+.readiness--not_ready .readiness__dot {
+  background: var(--danger);
+}
+
+/* --- Layer panel -------------------------------------------------------------- */
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--row-height);
+  padding: 0 2px;
+}
+
+.layer-row--inactive {
+  opacity: 0.55;
+}
+
+.layer-row__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  flex: none;
+}
+
+.layer-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.layer-row__solo {
+  font-size: var(--font-size-small);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-muted);
+  width: 18px;
+  height: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.layer-row__solo[aria-pressed="true"] {
+  color: var(--surface-0);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.layer-row__opacity {
+  width: 52px;
+  accent-color: var(--accent);
+}
+
+.panel__actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+/* --- Net list ------------------------------------------------------------------ */
+.net-search {
+  width: 100%;
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 6px;
+  margin: 4px 0;
+}
+
+.net-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.net-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--row-height);
+  padding: 0 4px;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-bottom: 1px solid var(--surface-2);
+  cursor: pointer;
+}
+
+.net-row:hover {
+  background: var(--surface-1);
+}
+
+.net-row[aria-pressed="true"] {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.net-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.net-row__meta {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* --- Viewport HUD ----------------------------------------------------------------- */
+.viewport__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+.viewport__hud {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
+.viewport__controls {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.viewport__hover {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  font-size: var(--font-size-small);
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
+/* --- Open board / import states -------------------------------------------------- */
+.open-board {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+
+.open-board__card {
+  width: 380px;
+  padding: 20px;
+  text-align: center;
+  background: var(--surface-0);
+  border: 1px dashed var(--border);
+}
+
+.open-board__card--dragging {
+  border-color: var(--accent);
+}
+
+.open-board__error {
+  margin-top: 10px;
+  text-align: left;
+  color: var(--danger);
+  font-size: var(--font-size-small);
+  white-space: pre-wrap;
+}
+
+/* --- Bottom tabs -------------------------------------------------------------------- */
+.bottom-panel {
+  display: flex;
+  flex-direction: column;
+  height: 240px;
+  background: var(--surface-0);
+  border-top: 1px solid var(--border);
+  min-height: 0;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-bar__tab {
+  font: inherit;
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.tab-bar__tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  flex: 1;
+  overflow: auto;
+  padding: 6px 10px;
+}
+
+.tab-panel--split {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 2fr;
+  gap: 16px;
+}
+
+/* --- Stackup cross-section ------------------------------------------------------------ */
+.stackup {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 16px;
+}
+
+.stackup__section {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  align-self: start;
+}
+
+.stackup__slice {
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: var(--font-size-small);
+  white-space: nowrap;
+  min-height: 4px;
+}
+
+.stackup__slice--conductive {
+  color: #fff;
+  font-weight: 600;
+  text-shadow: 0 0 2px rgb(0 0 0 / 60%);
+}
+
+.stackup__slice--dielectric {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.stackup__slice--selected {
+  outline: 2px solid var(--viewport-selection);
+  outline-offset: -2px;
+}
+
+/* --- Diagnostics --------------------------------------------------------------------------- */
+.diag-severity--info {
+  color: var(--text-muted);
+}
+.diag-severity--warning {
+  color: var(--warning);
+}
+.diag-severity--error {
+  color: var(--danger);
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px 10px;
+  align-content: start;
+}
+
+.row-button {
+  cursor: pointer;
+}
+
+.row-button:hover {
+  background: var(--surface-1);
+}
+
+tr[aria-selected="true"] {
+  background: var(--surface-2);
+}
+
+/* Inspector values wrap: long layer lists must not push the table off-panel. */
+.panel--right .property-table th,
+.panel--right .property-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  height: auto;
+  min-height: var(--row-height);
+}

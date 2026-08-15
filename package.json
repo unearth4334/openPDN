@@ -1,0 +1,22 @@
+{
+  "name": "openpdn",
+  "version": "0.0.1",
+  "private": true,
+  "description": "openPDN monorepo root: delegates to the frontend workspace",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/web",
+    "build": "npm run build --workspace apps/web",
+    "test": "npm run test --workspace apps/web",
+    "lint": "npm run lint --workspace apps/web",
+    "format": "npm run format --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/web",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

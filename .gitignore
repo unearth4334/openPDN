@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# openPDN .gitignore
+#
+# Rule of thumb: anything describing *our* infrastructure or credentials is
+# ignored; anything needed to reproduce a build or a test is committed.
+# ---------------------------------------------------------------------------
+
+# Local agent knowledge / private infrastructure notes -----------------------
+.agents/private/
+
+# Deployment state and secrets ----------------------------------------------
+.deploy/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+!tests/fixtures/**/*.key
+secrets/
+
+# Python ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.venv/
+venv/
+
+# Node / frontend ------------------------------------------------------------
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# IDE / local state ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Simulation / cache output --------------------------------------------------
+.cache/
+artifacts/
+results/
+*.msh
+*.vtu
+
+# Private local PCB fixtures and everything derived from them ----------------
+# Confidential boards used for local development only. Never commit these or
+# any dump/screenshot/report generated from them. Exact paths on purpose:
+# redistributable IPC-2581 fixtures under tests/fixtures/ stay committed.
+/test.cvg
+/.local-fixtures/
+/.local/
+
+# Explicitly keep committed examples and reproducible fixtures ---------------
+!docker-compose.example.yml
+!tests/fixtures/
+!tests/fixtures/**

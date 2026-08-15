@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Negative (subtractive) artwork and an unknown construct, hand-written for
+  openPDN tests.
+
+  The importer does not yet resolve negative polarity; this fixture pins the
+  required behaviour: the negative set's copper is NOT imported, an ERROR
+  diagnostic is raised, and simulation readiness is NOT_READY (confidently
+  wrong copper would be worse than a refusal).
+
+  The <MadeUpPrimitive> inside the second set pins the unsupported-construct
+  path: it must surface as a diagnostic, never silently disappear.
+-->
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Ecad name="negative-features">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Top" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="0.035">
+        <StackupGroup name="all" thickness="0.035">
+          <StackupLayer layerOrGroupRef="Top" thickness="0.035" sequence="1"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="negative-features">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Top">
+          <Set net="GND">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="0" y="0"/>
+                  <PolyStepSegment x="10" y="0"/>
+                  <PolyStepSegment x="10" y="10"/>
+                  <PolyStepSegment x="0" y="10"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+          <Set net="GND" polarity="NEGATIVE">
+            <Features>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="4" y="4"/>
+                  <PolyStepSegment x="6" y="4"/>
+                  <PolyStepSegment x="6" y="6"/>
+                  <PolyStepSegment x="4" y="6"/>
+                </Polygon>
+              </Contour>
+            </Features>
+          </Set>
+          <Set net="GND">
+            <Features>
+              <MadeUpPrimitive size="1"/>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

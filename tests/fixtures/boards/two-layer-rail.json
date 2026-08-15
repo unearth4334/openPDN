@@ -1,0 +1,193 @@
+{
+  "openpdn_canonical_board": 1,
+  "board": {
+    "id": "brd-two-layer-rail",
+    "name": "Two-layer 0V85 rail (regression fixture)",
+    "stackup": [
+      {
+        "id": "L1",
+        "name": "TOP",
+        "function": "signal",
+        "index": 0,
+        "thickness": {
+          "value": 3.48e-05,
+          "unit": "m",
+          "provenance": "imported",
+          "note": "1 oz finished copper from the fabrication stackup"
+        },
+        "material": {
+          "name": "Copper (annealed, 100 % IACS)",
+          "conductivity_s_per_m": 58001000.0,
+          "temperature_coefficient_per_k": 0.00393,
+          "reference_temperature_k": 293.15
+        }
+      },
+      {
+        "id": "L2",
+        "name": "CORE",
+        "function": "dielectric",
+        "index": 1,
+        "thickness": {
+          "value": 0.0015,
+          "unit": "m",
+          "provenance": "imported",
+          "note": null
+        },
+        "material": null
+      },
+      {
+        "id": "L3",
+        "name": "BOTTOM",
+        "function": "plane",
+        "index": 2,
+        "thickness": {
+          "value": 3.48e-05,
+          "unit": "m",
+          "provenance": "assumed",
+          "note": "Layer thickness absent from the source; 1 oz nominal assumed"
+        },
+        "material": {
+          "name": "Copper (annealed, 100 % IACS)",
+          "conductivity_s_per_m": 58001000.0,
+          "temperature_coefficient_per_k": 0.00393,
+          "reference_temperature_k": 293.15
+        }
+      }
+    ],
+    "nets": [
+      { "id": "NET_VCC", "name": "VCC0V85" },
+      { "id": "NET_GND", "name": "GND" }
+    ],
+    "copper_regions": [
+      {
+        "id": "CU_TOP_VCC",
+        "net_id": "NET_VCC",
+        "layer_id": "L1",
+        "outline": {
+          "exterior": [[0.005, 0.005], [0.045, 0.005], [0.045, 0.013], [0.005, 0.013]],
+          "holes": []
+        },
+        "thickness": null
+      },
+      {
+        "id": "CU_BOT_VCC",
+        "net_id": "NET_VCC",
+        "layer_id": "L3",
+        "outline": {
+          "exterior": [[0.005, 0.005], [0.045, 0.005], [0.045, 0.013], [0.005, 0.013]],
+          "holes": []
+        },
+        "thickness": null
+      },
+      {
+        "id": "CU_BOT_GND",
+        "net_id": "NET_GND",
+        "layer_id": "L3",
+        "outline": {
+          "exterior": [[0.005, 0.018], [0.045, 0.018], [0.045, 0.026], [0.005, 0.026]],
+          "holes": []
+        },
+        "thickness": null
+      }
+    ],
+    "vias": [
+      {
+        "id": "V1",
+        "net_id": "NET_VCC",
+        "from_layer_id": "L1",
+        "to_layer_id": "L3",
+        "position": [0.015, 0.009],
+        "finished_hole_diameter": {
+          "value": 0.0003,
+          "unit": "m",
+          "provenance": "imported",
+          "note": null
+        },
+        "plating_thickness": {
+          "value": 2.5e-05,
+          "unit": "m",
+          "provenance": "assumed",
+          "note": "IPC-6012 Class 2 minimum average plating; not present in the source"
+        }
+      },
+      {
+        "id": "V2",
+        "net_id": "NET_VCC",
+        "from_layer_id": "L1",
+        "to_layer_id": "L3",
+        "position": [0.035, 0.009],
+        "finished_hole_diameter": {
+          "value": 0.0003,
+          "unit": "m",
+          "provenance": "imported",
+          "note": null
+        },
+        "plating_thickness": null
+      }
+    ],
+    "pads": [
+      {
+        "id": "PAD_J4_3",
+        "layer_id": "L1",
+        "position": [0.006, 0.009],
+        "net_id": "NET_VCC",
+        "outline": null
+      },
+      {
+        "id": "PAD_U1_A1",
+        "layer_id": "L1",
+        "position": [0.044, 0.009],
+        "net_id": "NET_VCC",
+        "outline": null
+      },
+      {
+        "id": "PAD_U1_GND",
+        "layer_id": "L3",
+        "position": [0.044, 0.022],
+        "net_id": "NET_GND",
+        "outline": null
+      }
+    ],
+    "terminals": [
+      {
+        "id": "T_J4_3",
+        "name": "J4.3",
+        "net_id": "NET_VCC",
+        "pad_ids": ["PAD_J4_3"],
+        "component_id": "C_J4"
+      },
+      {
+        "id": "T_U1_A1",
+        "name": "U1.A1",
+        "net_id": "NET_VCC",
+        "pad_ids": ["PAD_U1_A1"],
+        "component_id": "C_U1"
+      },
+      {
+        "id": "T_U1_GND",
+        "name": "U1.GND",
+        "net_id": "NET_GND",
+        "pad_ids": ["PAD_U1_GND"],
+        "component_id": "C_U1"
+      }
+    ],
+    "components": [
+      {
+        "id": "C_J4",
+        "reference_designator": "J4",
+        "terminal_ids": ["T_J4_3"],
+        "part_number": null
+      },
+      {
+        "id": "C_U1",
+        "reference_designator": "U1",
+        "terminal_ids": ["T_U1_A1", "T_U1_GND"],
+        "part_number": null
+      }
+    ],
+    "notes": [
+      "Hand-written regression fixture: a 40 mm x 8 mm rail on two layers, stitched by two vias.",
+      "Deliberately incomplete: L3 thickness and V1 plating are assumed, V2 plating is unknown."
+    ]
+  }
+}
