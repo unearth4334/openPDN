@@ -172,6 +172,13 @@ into physical conductive area. Rules:
   2.5-D sheet solver meshes over. See the `pcb-domain-model` skill.
 * Report every repair, dropped feature and approximation as a `Diagnostic`. An
   importer that silently "fixes" artwork is worse than one that fails.
+* **Read arc endpoints by how closed they are.** Exactly coincident endpoints
+  mean a full circle; endpoints a few nanometres apart are a zero-length
+  segment the generator rounded. The two are one `if` apart and produce
+  wildly different copper: because the sweep is taken modulo a full turn, a
+  12 nm backwards displacement read as an open arc becomes a 359.99 degree
+  sweep, painting a complete ring where the design has nothing. `classify_arc`
+  owns that decision and the reinterpretation is diagnosed, never silent.
 
 Shapely enters in two places, both behind boundaries: stroke-to-outline
 resolution inside this adapter, and the per-(net, layer) Boolean union in the

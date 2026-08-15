@@ -14,9 +14,11 @@ import pytest
 
 from openpdn.pcb_import.ipc2581.geometry import (
     ARC_SAGITTA_TOLERANCE_M,
+    ArcClosure,
     DegenerateFeatureError,
     apply_xform,
     circle_outline,
+    classify_arc,
     polygon_ring,
     stroke_to_polygons,
     tessellate_arc,
@@ -168,3 +170,43 @@ class TestStrokeResolution:
     def test_a_zero_width_stroke_is_degenerate_not_invented(self):
         with pytest.raises(DegenerateFeatureError):
             stroke_to_polygons([(0.0, 0.0), (1e-3, 0.0)], 0.0, round_ends=True)
+
+
+class TestArcClosure:
+    """How an arc's endpoints are read decides whether copper exists at all.
+
+    A generator writes exactly-coincident endpoints to mean a full circle. It
+    also writes endpoints a few nanometres apart when it rounds a zero-length
+    segment -- and reading *those* as an open arc sweeps almost a whole turn,
+    painting a ring the design does not contain.
+    """
+
+    def test_exactly_coincident_endpoints_are_a_full_circle(self):
+        assert classify_arc((1.0, 0.0), (1.0, 0.0)) is ArcClosure.FULL_CIRCLE
+
+    def test_endpoints_a_few_nanometres_apart_are_degenerate(self):
+        # 12 nm apart: the case observed in a real export.
+        assert classify_arc((1.0, 0.0), (1.0 - 12e-9, 0.0)) is ArcClosure.DEGENERATE
+
+    def test_ordinary_endpoints_are_open(self):
+        assert classify_arc((1.0, 0.0), (0.0, 1.0)) is ArcClosure.OPEN
+
+    def test_a_degenerate_arc_does_not_sweep_a_circle(self):
+        # Radius 0.3178 mm, endpoints 12 nm apart straddling the top of the
+        # circle -- so their angles differ in the opposite sense to the stated
+        # direction, which is what makes a naive sweep wrap almost fully round.
+        # Swept that way it would span the full 0.6356 mm diameter.
+        start = (10.317806e-3, 5.3178e-3)
+        end = (10.317794e-3, 5.3178e-3)
+        center = (10.3178e-3, 5.0e-3)
+        points = tessellate_arc(start, end, center, clockwise=True)
+        span_m = max(x for x, _ in points) - min(x for x, _ in points)
+        assert span_m < 1e-6
+        assert len(points) == 2
+
+    def test_a_true_full_circle_still_sweeps(self):
+        start = end = (10.0e-3, 5.0e-3)
+        center = (10.3178e-3, 5.0e-3)
+        points = tessellate_arc(start, end, center, clockwise=True)
+        span_m = max(x for x, _ in points) - min(x for x, _ in points)
+        assert span_m == pytest.approx(2 * 0.3178e-3, rel=1e-3)

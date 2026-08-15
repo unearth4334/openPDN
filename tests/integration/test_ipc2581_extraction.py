@@ -17,6 +17,7 @@ from openpdn.domain.results import DiagnosticSeverity
 from openpdn.geometry.shapely_engine import ShapelyGeometryNormalizer
 from openpdn.pcb_import.api import SimulationReadiness
 from openpdn.pcb_import.ipc2581 import IPC2581Importer
+from openpdn.pcb_import.ipc2581.geometry import ARC_SAGITTA_TOLERANCE_M
 
 pytestmark = pytest.mark.integration
 
@@ -206,3 +207,50 @@ class TestRefusalsAndDiagnostics:
             if diagnostic.code == "import.unsupported_construct"
         ]
         assert any("MadeUpPrimitive" in d.context.get("construct", "") for d in unsupported)
+
+
+@pytest.fixture(scope="module")
+def arc_result(importer: IPC2581Importer):
+    return importer.load(FIXTURES / "degenerate-arc" / "board.xml")
+
+
+class TestArcEndpointClosure:
+    """Two arcs that both look closed must import as very different copper."""
+
+    def _region(self, arc_result, net_name: str):
+        board = arc_result.board
+        net_id = next(net.id for net in board.nets if net.name == net_name)
+        return next(region for region in board.copper_regions if region.net_id == net_id)
+
+    def test_exactly_coincident_endpoints_import_as_an_annulus(self, arc_result):
+        region = self._region(arc_result, "A_FULL")
+        # Stroke 0.1 mm wide around r = 0.5 mm: pi (0.55^2 - 0.45^2) mm^2.
+        assert region.outline.holes
+        assert region.area_m2 == pytest.approx(math.pi * 0.1 * 1e-6, rel=1e-3)
+
+    def test_nanometre_apart_endpoints_import_as_a_dot_not_a_ring(self, arc_result):
+        # The regression: read as an open arc this swept 359.998 degrees and
+        # painted a 0.3048 mm wide ring of radius 0.3178 mm.
+        region = self._region(arc_result, "A_DEGENERATE")
+        assert not region.outline.holes
+        # The round cap is a polygon inscribed in the true disc, so it sits
+        # inside it by at most the sagitta tolerance -- that bound, not a
+        # round-number percentage, is what this asserts.
+        box = region.outline.bounding_box
+        # A round-capped stroke over the 12 nm the endpoints are apart: as wide
+        # as the stroke plus that residual, and exactly the stroke tall. The
+        # round cap is a polygon inscribed in the true disc, so it sits inside
+        # it by at most the sagitta tolerance -- that bound, not a round-number
+        # percentage, is the criterion.
+        assert 0.3048e-3 - box.height_m <= 2 * ARC_SAGITTA_TOLERANCE_M
+        assert box.width_m - box.height_m == pytest.approx(12e-9, abs=1e-10)
+        # Area follows from the same bound: ~0.8 % under the exact disc, and
+        # nowhere near the 0.6 mm^2 ring the misread arc used to paint.
+        assert region.area_m2 == pytest.approx(math.pi * 0.1524**2 * 1e-6, rel=1e-2)
+
+    def test_the_reinterpretation_is_reported(self, arc_result):
+        # An importer that silently "fixes" artwork is worse than one that fails.
+        assert any(
+            diagnostic.code == "import.degenerate_arc" and diagnostic.context["count"] == "1"
+            for diagnostic in arc_result.diagnostics
+        )

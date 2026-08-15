@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Arc endpoint closure, hand-written for openPDN tests.
+
+  Generators write two different things that both look "closed":
+
+  * A_FULL: start and end are *exactly* equal — the standard way to write a
+    complete circle. Stroked at 0.1 mm around r = 0.5 mm it is an annulus of
+    pi * (0.55^2 - 0.45^2) = 0.3142 mm^2, and it has a hole.
+
+  * A_DEGENERATE: start and end differ by 12 nm — a zero-length segment the
+    generator rounded. The two points straddle the top of the circle, so the
+    endpoint angles differ by a couple of thousandths of a degree in the
+    *opposite* sense to the stated direction: read as an open arc it sweeps
+    359.998 degrees and paints a 0.3048 mm wide ring of radius 0.3178 mm that
+    the design does not contain. It must import as the dot its endpoints
+    describe: pi * 0.1524^2 = 0.0730 mm^2, with no hole.
+
+  Taken from a real export, where exactly two such arcs put phantom copper
+  rings on an inner layer.
+-->
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Ecad name="degenerate-arc">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Top" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="0.035">
+        <StackupGroup name="all" thickness="0.035">
+          <StackupLayer layerOrGroupRef="Top" thickness="0.035" sequence="1"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="degenerate-arc">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="30" y="0"/>
+            <PolyStepSegment x="30" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Top">
+          <Set net="A_FULL">
+            <Features>
+              <Arc startX="20.000000" startY="5.000000" endX="20.000000" endY="5.000000"
+                   centerX="20.500000" centerY="5.000000" clockwise="true">
+                <LineDesc lineEnd="ROUND" lineWidth="0.1" lineProperty="SOLID"/>
+              </Arc>
+            </Features>
+          </Set>
+          <Set net="A_DEGENERATE">
+            <Features>
+              <Arc startX="10.317806" startY="5.317800" endX="10.317794" endY="5.317800"
+                   centerX="10.317800" centerY="5.000000" clockwise="true">
+                <LineDesc lineEnd="ROUND" lineWidth="0.3048" lineProperty="SOLID"/>
+              </Arc>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

@@ -24,6 +24,7 @@ gets pinned.
 | `via-through-board/board.xml` | Through/blind/buried via spans, drill diameters, dictionary pad shapes, via lands as copper, a pin pad producing a pad + terminal + component link, deliberately absent plating |
 | `plane-and-trace/board.xml` | Contour with a cutout, round-ended stroke, full-circle arc stroke (annulus), rotated rectangular flash, two disjoint islands on one net, placeholder-net copper — all with hand-computable areas |
 | `negative-features/board.xml` | Negative-polarity refusal (ERROR diagnostic + NOT_READY) and the unsupported-construct diagnostic |
+| `degenerate-arc/board.xml` | Arc endpoint closure: exactly-coincident endpoints are a full circle, endpoints 12 nm apart are a rounded zero-length segment and must not sweep one |
 
 ## Planned
 

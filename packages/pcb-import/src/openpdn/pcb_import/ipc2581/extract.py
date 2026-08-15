@@ -56,9 +56,11 @@ from openpdn.pcb_import.api import (
     SimulationReadiness,
 )
 from openpdn.pcb_import.ipc2581.geometry import (
+    ArcClosure,
     DegenerateFeatureError,
     apply_xform,
     circle_outline,
+    classify_arc,
     polygon_ring,
     polyline_path,
     rectangle_ring,
@@ -218,6 +220,7 @@ class _Extraction:
         self.non_plated_hole_count = 0
         self.via_missing_span = 0
         self.declared_pin_nets: dict[tuple[str, str], str] = {}
+        self.degenerate_arc_count = 0
         self.netlist_mismatches = 0
         self._region_seq = 0
 
@@ -502,9 +505,16 @@ class _Extraction:
             return self._stroke(path, primitive.line_desc, xform, offset)
         if isinstance(primitive, IpcArc):
             self._count("arcs")
+            start = (primitive.start_x * scale, primitive.start_y * scale)
+            end = (primitive.end_x * scale, primitive.end_y * scale)
+            if classify_arc(start, end) is ArcClosure.DEGENERATE:
+                # Endpoints rounded to nearly the same point; read as an open
+                # arc this would sweep a whole turn. Counted, then drawn as
+                # the zero-length segment it is.
+                self.degenerate_arc_count += 1
             path = tessellate_arc(
-                (primitive.start_x * scale, primitive.start_y * scale),
-                (primitive.end_x * scale, primitive.end_y * scale),
+                start,
+                end,
                 (primitive.center_x * scale, primitive.center_y * scale),
                 primitive.clockwise,
             )
@@ -774,6 +784,15 @@ class _Extraction:
                 "does not yet resolve; the affected layers' copper is incomplete and the "
                 "board is not usable for simulation.",
                 count=str(self.negative_polarity_count),
+            )
+        if self.degenerate_arc_count:
+            self._diagnose(
+                "import.degenerate_arc",
+                DiagnosticSeverity.INFO,
+                "Arcs whose endpoints round to the same point were imported as zero-length "
+                "segments rather than as full circles; the source is ambiguous at that scale "
+                "and reading them as arcs would add copper the design does not contain.",
+                count=str(self.degenerate_arc_count),
             )
         if self.degenerate:
             self._diagnose(

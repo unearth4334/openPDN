@@ -22,11 +22,14 @@ Tolerances are named, documented and chosen for fabrication-scale geometry:
   double-precision noise at board scale (~1e-10 m for metre-scale values).
 * `MIN_STROKE_WIDTH_M` -- a stroke narrower than 1 nm has no physical area;
   such features are reported as degenerate rather than buffered into slivers.
+* `ARC_FULL_CIRCLE_TOLERANCE_M` / `ARC_DEGENERATE_CHORD_M` -- how an arc whose
+  endpoints nearly coincide is read. See `classify_arc`.
 """
 
 from __future__ import annotations
 
 import math
+from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Literal
 
 from openpdn.domain.geometry import Polygon2D
@@ -45,6 +48,23 @@ if TYPE_CHECKING:
 ARC_SAGITTA_TOLERANCE_M: Final = 1e-6
 COINCIDENT_POINT_TOLERANCE_M: Final = 1e-9
 MIN_STROKE_WIDTH_M: Final = 1e-9
+
+#: An arc whose endpoints are this close is a closed circle. Deliberately at
+#: floating-point round-trip scale (1 pm) rather than fabrication scale:
+#: generators write *exactly* equal endpoints to mean "full circle", so only
+#: representation noise should be absorbed here.
+ARC_FULL_CIRCLE_TOLERANCE_M: Final = 1e-12
+
+#: An arc whose endpoints differ by less than this -- but by more than
+#: representation noise -- is a degenerate segment, not a circle.
+#:
+#: Endpoints 12 nm apart cannot describe a manufacturable feature: no PCB
+#: process resolves it, and no artwork intends it. They arise when a generator
+#: rounds a zero-length segment. The distinction matters enormously because
+#: the sweep is computed modulo a full turn: read as an open arc, a 12 nm
+#: backwards displacement becomes a 359.99 degree sweep, which paints a
+#: complete ring of copper where the design has none.
+ARC_DEGENERATE_CHORD_M: Final = 1e-6
 
 #: Bounds on segments used to approximate one full circle. The lower bound
 #: keeps tiny circles (where the sagitta criterion would allow a triangle)
@@ -65,6 +85,37 @@ class DegenerateFeatureError(ValueError):
 Point = tuple[float, float]
 
 
+class ArcClosure(StrEnum):
+    """How an arc's endpoints relate, which decides how far it sweeps."""
+
+    #: Endpoints are distinct: sweep from start to end in the stated direction.
+    OPEN = "open"
+    #: Endpoints coincide exactly: a complete circle, per IPC-2581 convention.
+    FULL_CIRCLE = "full_circle"
+    #: Endpoints differ by less than fabrication resolution: a zero-length
+    #: segment a generator rounded, never a circle.
+    DEGENERATE = "degenerate"
+
+
+def classify_arc(start: Point, end: Point) -> ArcClosure:
+    """Decide whether an arc is open, a full circle, or a rounded-away segment.
+
+    The three-way split exists because the two closed cases are read in
+    opposite ways and are only distinguishable by *how* closed they are:
+
+    * exactly coincident endpoints are the standard way to write a circle;
+    * endpoints a few nanometres apart are a rounded zero-length segment, and
+      reading them as an open arc sweeps almost a full turn -- painting a ring
+      of copper the design does not contain.
+    """
+    chord_m = math.hypot(start[0] - end[0], start[1] - end[1])
+    if chord_m <= ARC_FULL_CIRCLE_TOLERANCE_M:
+        return ArcClosure.FULL_CIRCLE
+    if chord_m <= ARC_DEGENERATE_CHORD_M:
+        return ArcClosure.DEGENERATE
+    return ArcClosure.OPEN
+
+
 # --- arcs ---------------------------------------------------------------------
 def tessellate_arc(
     start: Point,
@@ -75,7 +126,9 @@ def tessellate_arc(
 ) -> list[Point]:
     """Approximate a circular arc with chords, including both endpoints.
 
-    Equal start and end points denote a full circle, per IPC-2581 convention.
+    Endpoint handling follows `classify_arc`: exactly coincident endpoints mean
+    a full circle, near-coincident endpoints mean a degenerate segment, and
+    anything else sweeps from start to end in the stated direction.
 
     The radius is taken from the start point; if the end point disagrees (a
     common generator rounding artefact) the chain still lands exactly on the
@@ -88,10 +141,15 @@ def tessellate_arc(
     if radius_m <= COINCIDENT_POINT_TOLERANCE_M:
         raise DegenerateFeatureError("Arc has zero radius")
 
+    closure = classify_arc(start, end)
+    if closure is ArcClosure.DEGENERATE:
+        # Sweeping this would wrap almost all the way round the circle.
+        return [start, end]
+
     start_angle = math.atan2(start[1] - center[1], start[0] - center[0])
     end_angle = math.atan2(end[1] - center[1], end[0] - center[0])
 
-    full_circle = math.hypot(start[0] - end[0], start[1] - end[1]) <= COINCIDENT_POINT_TOLERANCE_M
+    full_circle = closure is ArcClosure.FULL_CIRCLE
     if full_circle:
         sweep = 2.0 * math.pi
     elif clockwise:
