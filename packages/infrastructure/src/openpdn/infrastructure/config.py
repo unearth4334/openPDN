@@ -99,8 +99,42 @@ class Settings(BaseSettings):
         ),
     )
     solver: str = Field(
-        default="mock",
+        default="fem-2p5d",
         description="Default electrical solver registry key.",
+    )
+
+    # Simulation execution (ADR-0011) -----------------------------------------
+    worker_max_dofs: int = Field(
+        default=1_500_000,
+        gt=0,
+        description=(
+            "Hard cap on estimated degrees of freedom per job. Server-side "
+            "enforcement: jobs over budget are refused, never degraded."
+        ),
+    )
+    worker_max_concurrent_jobs: int = Field(
+        default=1,
+        ge=1,
+        le=16,
+        description=(
+            "Solver workers running at once. Conservative by default: one "
+            "trustworthy direct solve beats several memory-starved ones."
+        ),
+    )
+    worker_max_job_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        description="Wall-clock limit per job before forced cancellation.",
+    )
+    worker_lease_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="Worker lease duration; expired leases trigger recovery.",
+    )
+    worker_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="Attempts before a silently-dying job is marked failed.",
     )
 
     # HTTP API ----------------------------------------------------------------

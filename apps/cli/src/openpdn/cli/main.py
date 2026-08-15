@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from openpdn.application.errors import ApplicationError
 from openpdn.application.version import APPLICATION_NAME, get_version
+from openpdn.cli import simulation as simulation_cli
 from openpdn.infrastructure.config import LogFormat, LogLevel, load_settings
 from openpdn.infrastructure.container import Container, build_container
 from openpdn.infrastructure.logging import configure_logging
@@ -97,6 +98,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--expect-nets", type=int, help="Required named-net count.")
     validate_parser.add_argument("--expect-components", type=int, help="Required component count.")
 
+    simulation_cli.register(subparsers)
+
     serve_parser = subparsers.add_parser("serve", help="Run the HTTP API.")
     serve_parser.add_argument("--host", help="Bind address (default: OPENPDN_API_HOST).")
     serve_parser.add_argument("--port", type=int, help="Bind port (default: OPENPDN_API_PORT).")
@@ -136,6 +139,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _dispatch(args: argparse.Namespace, container: Container) -> int:
     """Route a parsed command to its handler."""
+    handled = simulation_cli.dispatch(args, container)
+    if handled is not None:
+        return handled
     if args.command == "info":
         return _command_info(container, as_json=args.json)
     if args.command == "solvers":

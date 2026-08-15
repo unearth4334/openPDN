@@ -15,6 +15,7 @@ Short records of decisions that are expensive to reverse. Each has **Status**,
 | [0008](0008-canvas-board-renderer.md) | Board viewport on Canvas 2D behind a scene-model boundary | Accepted |
 | [0009](0009-board-store-and-geometry-transport.md) | In-memory board store keyed by content + pipeline versions; coarse geometry transport | Accepted |
 | [0010](0010-fem-sheet-solver.md) | In-house 2.5-D sheet FEM: filtered-Delaunay meshing, contact-region terminals, exact via annuli, SuperLU direct solve | Accepted |
+| [0011](0011-simulation-jobs.md) | Durable simulation jobs: SQLite queue, isolated process workers, atomic artifact publication | Accepted |
 
 ## Writing one
 

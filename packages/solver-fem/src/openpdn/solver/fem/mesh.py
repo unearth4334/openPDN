@@ -72,6 +72,16 @@ SMALL_RING_PERIMETER_IN_SIZES = 20.0
 #: clearance-graded boundary spacing (see `_boundary_spacing`).
 EDGE_CONTAINMENT_SAMPLES = 5
 
+#: Containment tests run against the polygon dilated by this much. Imported
+#: arcs are tessellated with a 1 um sagitta tolerance (the importer's
+#: ARC_SAGITTA_TOLERANCE_M), so a chord between adjacent hole-ring vertices
+#: legitimately dips up to ~1 um into the hole; without tolerance every
+#: triangle touching a hole ring is culled and annular pads lose their inner
+#: band. 2 um absorbs tessellation sag while remaining far below the ~25 um
+#: minimum slot any fabrication process produces -- it cannot bridge a real
+#: clearance.
+CONTAINMENT_TOLERANCE_M = 2e-6
+
 
 @dataclass(frozen=True, slots=True)
 class RegionMeshQuality:
@@ -577,6 +587,9 @@ def _filter_triangles(
     every edge inside. Degenerate slivers are dropped by area.
     """
     tri = simplices.astype(np.int32)
+    # See CONTAINMENT_TOLERANCE_M: tessellated arcs make exact containment
+    # reject legitimate boundary triangles.
+    tolerant = polygon.buffer(CONTAINMENT_TOLERANCE_M, quad_segs=2)
     p = points[tri]  # (m, 3, 2)
     # Signed area; also orients triangles CCW.
     area2 = (p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1]) - (p[:, 2, 0] - p[:, 0, 0]) * (
@@ -592,7 +605,7 @@ def _filter_triangles(
     p = points[tri]
 
     centroid = p.mean(axis=1)
-    keep = shapely.contains_xy(polygon, centroid[:, 0], centroid[:, 1])
+    keep = shapely.contains_xy(tolerant, centroid[:, 0], centroid[:, 1])
     tri, p = tri[keep], p[keep]
     if len(tri) == 0:
         return tri
@@ -603,7 +616,7 @@ def _filter_triangles(
         start, end = p[:, a, :], p[:, b, :]
         for f in fractions:
             sample = start + (end - start) * f
-            inside = shapely.intersects_xy(polygon, sample[:, 0], sample[:, 1])
+            inside = shapely.intersects_xy(tolerant, sample[:, 0], sample[:, 1])
             keep_mask &= inside
             if not keep_mask.any():
                 break

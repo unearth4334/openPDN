@@ -87,6 +87,9 @@ class FemFieldData:
     region_layer_ids: tuple[str, ...]
     region_net_ids: tuple[str, ...]
     via_currents_a: dict[str, float]
+    #: Per-barrel-segment detail: (via id, upper layer, lower layer, x, y,
+    #: conductance S, V upper, V lower) -- everything via inspection needs.
+    via_segment_detail: tuple[tuple[str, str, str, float, float, float, float, float], ...]
     conservation: ConservationReport
     matrix_nonzeros: int
 
@@ -171,6 +174,14 @@ class PreparedFemProblem:
             self.problem, self.board, study, assembly_seconds=0.0, cache_hit=True
         )
         return result
+
+    def solve_with_fields(
+        self, study: AnalysisStudy
+    ) -> tuple[ElectricalAnalysisResult, FemFieldData]:
+        """Excite the assembled system and return field data for artifacts."""
+        return _solve_prepared(
+            self.problem, self.board, study, assembly_seconds=0.0, cache_hit=True
+        )
 
 
 def _controls_for(board: Board, study: AnalysisStudy) -> MeshControls:
@@ -302,6 +313,19 @@ def _solve_prepared(
         region_layer_ids=tuple(str(ref.layer_id) for ref in problem.regions),
         region_net_ids=tuple(str(ref.net_id or "") for ref in problem.regions),
         via_currents_a=via_current,
+        via_segment_detail=tuple(
+            (
+                segment.via_id,
+                str(segment.upper_layer_id),
+                str(segment.lower_layer_id),
+                segment.position_x_m,
+                segment.position_y_m,
+                segment.conductance_s,
+                float(solution.voltage_v[segment.dof_upper]),
+                float(solution.voltage_v[segment.dof_lower]),
+            )
+            for segment in problem.via_segments
+        ),
         conservation=conservation,
         matrix_nonzeros=int(problem.matrix.nnz),
     )

@@ -92,6 +92,7 @@ the design is wrong, not the test. Changing `LAYER_RULES` requires an ADR.
 | Adding or changing tests | `.agents/skills/testing/SKILL.md` |
 | Board, stackup, nets, vias, studies | `.agents/skills/pcb-domain-model/SKILL.md` |
 | Solvers, meshing, numerics, results | `.agents/skills/solver-development/SKILL.md` |
+| Jobs, queue, workers, result artifacts | `.agents/skills/simulation-jobs/SKILL.md` |
 | Any UI work | `.agents/skills/frontend-ux/SKILL.md` |
 | The board viewport / renderer | `.agents/skills/pcb-viewer/SKILL.md` |
 

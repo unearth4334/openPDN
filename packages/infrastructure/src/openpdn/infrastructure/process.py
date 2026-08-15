@@ -35,6 +35,28 @@ _INHERITED_ENVIRONMENT_KEYS: Final = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"
 
 DEFAULT_TIMEOUT_SECONDS: Final = 600.0
 
+#: Numerical-library thread-count variables pinned on worker subprocesses so
+#: concurrent jobs cannot oversubscribe the host.
+_THREAD_COUNT_KEYS: Final = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def worker_environment(threads: int) -> dict[str, str]:
+    """Environment for a solver worker subprocess.
+
+    Inherits the parent environment (workers must see the same OPENPDN_*
+    configuration as the orchestrator) with numerical thread counts pinned.
+    This module is the one sanctioned place that touches `os.environ`.
+    """
+    environment = dict(os.environ)
+    for key in _THREAD_COUNT_KEYS:
+        environment[key] = str(max(1, threads))
+    return environment
+
 
 class ExternalToolError(Exception):
     """An external tool failed, timed out or is not installed."""

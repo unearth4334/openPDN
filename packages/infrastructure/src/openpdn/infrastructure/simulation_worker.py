@@ -1,0 +1,560 @@
+"""Execution of one claimed simulation job, in an isolated process.
+
+The orchestrator spawns `openpdn solver-worker --job-id X --worker-id Y` for
+each claimed job; this module is what that command runs. Isolation gives
+clean cancellation (the orchestrator kills the process), memory recovery and
+crash containment (ADR-0011).
+
+Failure classification (spec'd retry policy): a failure the worker *reports*
+-- invalid geometry, disconnected terminals, meshing failure, missing
+physical properties, a singular system -- is terminal and never retried
+automatically; only a worker that dies silently (crash, OOM kill, host
+reboot) leaves an expired lease behind, and only those are requeued by the
+orchestrator, below the attempt cap.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import threading
+import time
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+from openpdn.application.simulation_models import (
+    JobRecord,
+    JobState,
+    SimulationJobSpec,
+    SimulationKind,
+)
+from openpdn.application.version import get_version
+from openpdn.domain.provenance import Quantity
+from openpdn.domain.results import DiagnosticSeverity
+from openpdn.domain.study import (
+    AnalysisStudy,
+    CurrentLoad,
+    LoadId,
+    MeshSettings,
+    ProbeId,
+    ResistanceProbe,
+    SourceId,
+    StudyId,
+    VoltageSource,
+)
+from openpdn.domain.units import AMPERE, METRE, VOLT
+from openpdn.solver.api import SolverError
+from openpdn.solver.fem import SOLVER_VERSION, FemFieldData, FemSheetSolver
+from openpdn.solver.fem.solver import PROBE_TEST_CURRENT_A
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from openpdn.application.simulation_ports import JobStore, SimulationArtifactStore
+    from openpdn.domain.board import Board, NetId, TerminalId
+    from openpdn.domain.results import ElectricalAnalysisResult
+    from openpdn.geometry.api import GeometryNormalizer
+
+    #: Decodes a persisted canonical board document: (json, source name, digest).
+    BoardDecoder = Callable[[str, str, str], Board]
+
+_logger = logging.getLogger(__name__)
+
+#: Fraction of the lease after which the heartbeat renews it.
+_HEARTBEAT_FRACTION = 1.0 / 3.0
+
+#: Refinement factor for the Verification comparison mesh (see accuracy.py).
+_VERIFICATION_REFINEMENT = 1.4142135623730951
+
+#: Relative change in engineering quantities below which the Verification
+#: comparison reports convergence.
+_CONVERGENCE_TARGET = 0.01
+
+
+class _Heartbeat:
+    """Background lease renewal while the job runs."""
+
+    def __init__(self, jobs: JobStore, job_id: str, worker_id: str, lease_s: float) -> None:
+        self._jobs = jobs
+        self._job_id = job_id
+        self._worker_id = worker_id
+        self._lease_s = lease_s
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self) -> _Heartbeat:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        interval = max(1.0, self._lease_s * _HEARTBEAT_FRACTION)
+        while not self._stop.wait(interval):
+            self._jobs.renew_lease(self._job_id, self._worker_id, self._lease_s)
+
+
+def run_job(
+    *,
+    job_id: str,
+    worker_id: str,
+    jobs: JobStore,
+    artifacts: SimulationArtifactStore,
+    lease_seconds: float,
+    normalizer: GeometryNormalizer,
+    board_decoder: BoardDecoder,
+) -> int:
+    """Execute one claimed job to a terminal state. Returns an exit code."""
+    record = jobs.get(job_id)
+    if record is None:
+        _logger.error("worker.unknown_job", extra={"event": "worker.unknown_job", "job_id": job_id})
+        return 2
+    if record.state is not JobState.CLAIMED or record.claimed_by != worker_id:
+        _logger.error(
+            "worker.not_mine",
+            extra={"event": "worker.not_mine", "job_id": job_id, "state": record.state.value},
+        )
+        return 2
+
+    jobs.transition(job_id, JobState.RUNNING)
+    with _Heartbeat(jobs, job_id, worker_id, lease_seconds):
+        try:
+            summary = _execute(record, jobs, artifacts, normalizer, board_decoder)
+        except SolverError as exc:
+            # Numerical/configuration failure: terminal, diagnose don't retry.
+            artifacts.discard_working(job_id)
+            jobs.transition(job_id, JobState.FAILED, message=str(exc))
+            _logger.warning(
+                "worker.numerical_failure",
+                extra={"event": "worker.numerical_failure", "job_id": job_id},
+            )
+            return 1
+        except Exception as exc:
+            artifacts.discard_working(job_id)
+            jobs.transition(job_id, JobState.FAILED, message=f"{type(exc).__name__}: {exc}")
+            _logger.exception("worker.failed", extra={"event": "worker.failed", "job_id": job_id})
+            return 1
+
+    final_state = (
+        JobState.COMPLETED_WITH_WARNINGS if summary.get("has_warnings") else JobState.COMPLETED
+    )
+    if not jobs.transition(job_id, final_state, result_summary_json=json.dumps(summary)):
+        # The job was cancelled while we were finishing: artifacts stay
+        # unpublished-or-published per the transition that won; nothing to do.
+        _logger.info(
+            "worker.transition_lost",
+            extra={"event": "worker.transition_lost", "job_id": job_id},
+        )
+        return 0
+    return 0
+
+
+def _execute(
+    record: JobRecord,
+    jobs: JobStore,
+    artifacts: SimulationArtifactStore,
+    normalizer: GeometryNormalizer,
+    board_decoder: BoardDecoder,
+) -> dict[str, Any]:
+    """The pipeline: load board, solve, serialise, publish."""
+    spec = record.spec
+    job_id = spec.job_id
+    timings: dict[str, float] = {}
+
+    jobs.update_stage(job_id, "loading_board")
+    started = time.perf_counter()
+    board = _load_board(spec, artifacts, board_decoder)
+    timings["load_board_s"] = time.perf_counter() - started
+
+    study = _study_from_spec(spec, board, refine_factor=1.0)
+    solver = FemSheetSolver(normalizer=normalizer)
+
+    jobs.update_stage(job_id, "meshing")
+    started = time.perf_counter()
+    prepared = solver.prepare(board, study)
+    timings["mesh_and_assembly_s"] = time.perf_counter() - started
+
+    jobs.update_stage(job_id, "solving")
+    started = time.perf_counter()
+    result, fields = prepared.solve_with_fields(study)
+    timings["solve_s"] = time.perf_counter() - started
+
+    convergence: dict[str, Any] | None = None
+    if spec.verify_convergence:
+        jobs.update_stage(job_id, "verifying_convergence")
+        started = time.perf_counter()
+        fine_study = _study_from_spec(spec, board, refine_factor=_VERIFICATION_REFINEMENT)
+        fine_result, fine_fields = solver.solve_with_fields(board, fine_study)
+        timings["verification_s"] = time.perf_counter() - started
+        convergence = _compare_meshes(spec, result, fields, fine_result, fine_fields)
+        # The finer mesh is the better answer: publish it.
+        result, fields = fine_result, fine_fields
+
+    jobs.update_stage(job_id, "serializing")
+    started = time.perf_counter()
+    working = artifacts.working_dir(job_id)
+    summary = _write_artifacts(working, spec, board, result, fields, convergence, timings)
+    timings["serialize_s"] = time.perf_counter() - started
+    _write_manifest(working, spec, result, timings, normalizer.version)
+
+    artifacts.publish(job_id)
+    return summary
+
+
+def _load_board(
+    spec: SimulationJobSpec,
+    artifacts: SimulationArtifactStore,
+    board_decoder: BoardDecoder,
+) -> Board:
+    """Load the persisted canonical board document."""
+    document_json = artifacts.load_board_document(spec.board_digest)
+    if document_json is None:
+        raise FileNotFoundError(f"Board document {spec.board_digest} is not in the artifact store")
+    return board_decoder(document_json, spec.board_name, spec.board_digest)
+
+
+def run_inline(
+    spec: SimulationJobSpec, board: Board, normalizer: GeometryNormalizer
+) -> tuple[ElectricalAnalysisResult, FemFieldData]:
+    """Solve a spec directly in-process (CLI debugging path, no queue)."""
+    study = _study_from_spec(spec, board, refine_factor=1.0)
+    solver = FemSheetSolver(normalizer=normalizer)
+    return solver.solve_with_fields(board, study)
+
+
+def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float) -> AnalysisStudy:
+    """Build the immutable spec's `AnalysisStudy`, optionally refined."""
+    # A genuine refinement must scale the *feature-width* sizing too: most
+    # of a routed net's mesh is width-graded, so shrinking only the max/min
+    # bounds would barely change it and the comparison would prove nothing.
+    refined_across = math.ceil(spec.mesh.elements_across_feature * refine_factor)
+    mesh = MeshSettings(
+        target_element_size=Quantity.configured(spec.mesh.max_element_m / refine_factor, METRE),
+        minimum_element_size=Quantity.configured(spec.mesh.min_element_m / refine_factor, METRE),
+        elements_across_feature=refined_across,
+        growth_rate=spec.mesh.growth_rate,
+    )
+    sources = (
+        VoltageSource(
+            id=SourceId("source"),
+            terminal_id=_terminal(spec.source_terminal_id),
+            voltage=Quantity.configured(spec.source_voltage_v, VOLT),
+        ),
+    )
+    loads = tuple(
+        CurrentLoad(
+            id=LoadId(f"load-{index}"),
+            terminal_id=_terminal(load.terminal_id),
+            current=Quantity.configured(load.current_a, AMPERE),
+        )
+        for index, load in enumerate(spec.loads)
+    )
+    probes: tuple[ResistanceProbe, ...] = ()
+    if spec.kind is SimulationKind.RESISTANCE and spec.to_terminal_id is not None:
+        probes = (
+            ResistanceProbe(
+                id=ProbeId("probe"),
+                from_terminal_id=_terminal(spec.source_terminal_id),
+                to_terminal_id=_terminal(spec.to_terminal_id),
+            ),
+        )
+        # Drive the normalised test current through the main excitation so
+        # the published fields show the test-current distribution and the
+        # integrated loss numerically equals R at 1 A (P = I^2 R) -- an
+        # energy-consistency check the metrics carry for free (ADR-0011).
+        loads = (
+            CurrentLoad(
+                id=LoadId("probe-test-current"),
+                terminal_id=_terminal(spec.to_terminal_id),
+                current=Quantity.configured(PROBE_TEST_CURRENT_A, AMPERE),
+            ),
+        )
+    plating = (
+        Quantity.assumed(spec.via_plating_m, METRE, "study-level plating assumption")
+        if spec.via_plating_m is not None
+        else None
+    )
+    suffix = "" if refine_factor == 1.0 else "-fine"
+    return AnalysisStudy(
+        id=StudyId(f"{spec.job_id}{suffix}"),
+        name=spec.name,
+        board_id=str(board.id),
+        net_ids=(_net(spec.net_id),),
+        sources=sources,
+        loads=loads,
+        probes=probes,
+        mesh=mesh,
+        via_plating_thickness=plating,
+    )
+
+
+def _terminal(value: str) -> TerminalId:
+    from openpdn.domain.board import TerminalId as RealTerminalId
+
+    return RealTerminalId(value)
+
+
+def _net(value: str) -> NetId:
+    from openpdn.domain.board import NetId as RealNetId
+
+    return RealNetId(value)
+
+
+def _engineering_quantities(
+    spec: SimulationJobSpec, result: ElectricalAnalysisResult, fields: FemFieldData
+) -> dict[str, float]:
+    """The quantities mesh convergence is judged on (never the raw J peak)."""
+    quantities: dict[str, float] = {
+        "total_loss_w": fields.conservation.dissipated_power_w,
+    }
+    if result.probes:
+        quantities["resistance_ohm"] = result.probes[0].resistance_ohm
+    if spec.kind is SimulationKind.IR_DROP and result.terminals:
+        source_v = next(
+            (
+                t.voltage_v
+                for t in result.terminals
+                if str(t.terminal_id) == spec.source_terminal_id
+            ),
+            spec.source_voltage_v,
+        )
+        worst = max((source_v - t.voltage_v) for t in result.terminals)
+        quantities["worst_drop_v"] = worst
+    j99 = _j99(fields)
+    if j99 > 0.0:
+        quantities["j99_a_per_m2"] = j99
+    return quantities
+
+
+def _j99(fields: FemFieldData) -> float:
+    """Area-weighted 99th percentile of |J| from the field arrays."""
+    from openpdn.solver.fem.post import CurrentDensityStats  # noqa: F401  (doc pointer)
+
+    j = fields.tri_j_vol_a_per_m2
+    if len(j) == 0:
+        return 0.0
+    order = np.argsort(j)
+    # Approximate area weights from the stored per-triangle power/j ratio is
+    # not reliable; recompute areas from the mesh.
+    p = fields.points[fields.triangles]
+    area = (
+        np.abs(
+            (p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1])
+            - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 1] - p[:, 0, 1])
+        )
+        / 2.0
+    )
+    weights = area[order]
+    cumulative = np.cumsum(weights)
+    index = int(np.searchsorted(cumulative, 0.99 * cumulative[-1]))
+    return float(j[order][min(index, len(j) - 1)])
+
+
+def _compare_meshes(
+    spec: SimulationJobSpec,
+    coarse_result: ElectricalAnalysisResult,
+    coarse_fields: FemFieldData,
+    fine_result: ElectricalAnalysisResult,
+    fine_fields: FemFieldData,
+) -> dict[str, Any]:
+    """Verification-profile convergence evidence: quantity deltas across meshes."""
+    coarse = _engineering_quantities(spec, coarse_result, coarse_fields)
+    fine = _engineering_quantities(spec, fine_result, fine_fields)
+    comparison: dict[str, Any] = {
+        "coarse_elements": coarse_result.stats.mesh_elements,
+        "fine_elements": fine_result.stats.mesh_elements,
+        "target_fraction": _CONVERGENCE_TARGET,
+        "quantities": {},
+    }
+    worst = 0.0
+    for key, fine_value in fine.items():
+        coarse_value = coarse.get(key)
+        if coarse_value is None:
+            continue
+        scale = max(abs(fine_value), abs(coarse_value), 1e-30)
+        change = abs(fine_value - coarse_value) / scale
+        worst = max(worst, change)
+        comparison["quantities"][key] = {
+            "coarse": coarse_value,
+            "fine": fine_value,
+            "relative_change": change,
+        }
+    comparison["worst_relative_change"] = worst
+    comparison["converged"] = worst <= _CONVERGENCE_TARGET
+    return comparison
+
+
+def _write_artifacts(
+    working: Path,
+    spec: SimulationJobSpec,
+    board: Board,
+    result: ElectricalAnalysisResult,
+    fields: FemFieldData,
+    convergence: dict[str, Any] | None,
+    timings: dict[str, float],
+) -> dict[str, Any]:
+    """Write field arrays and metrics; return the compact summary."""
+    layers_dir = working / "layers"
+    layers_dir.mkdir(exist_ok=True)
+
+    # Group mesh data per physical layer for the overlay renderer.
+    layer_ids = sorted(set(fields.region_layer_ids))
+    layer_files: list[dict[str, Any]] = []
+    region_layer = np.asarray(
+        [layer_ids.index(layer) for layer in fields.region_layer_ids], dtype=np.int32
+    )
+    tri_layer = region_layer[fields.tri_region_index]
+    for index, layer_id in enumerate(layer_ids):
+        tri_mask = tri_layer == index
+        if not tri_mask.any():
+            continue
+        tris = fields.triangles[tri_mask]
+        used = np.unique(tris)
+        remap = np.full(len(fields.points), -1, dtype=np.int32)
+        remap[used] = np.arange(len(used), dtype=np.int32)
+        file_name = f"{index}.npz"
+        np.savez_compressed(
+            layers_dir / file_name,
+            points=fields.points[used],
+            triangles=remap[tris],
+            voltage_v=fields.node_voltage_v[used],
+            j_a_per_m2=fields.tri_j_vol_a_per_m2[tri_mask],
+            power_w=fields.tri_power_w[tri_mask],
+        )
+        layer_files.append(
+            {
+                "layer_id": layer_id,
+                "file": f"layers/{file_name}",
+                "points": len(used),
+                "triangles": int(tri_mask.sum()),
+            }
+        )
+
+    terminals = [
+        {
+            "terminal_id": str(t.terminal_id),
+            "voltage_v": t.voltage_v,
+            "current_a": t.current_a,
+            "is_source": str(t.terminal_id) == spec.source_terminal_id,
+        }
+        for t in result.terminals
+    ]
+    vias = [
+        {
+            "via_id": via_id,
+            "upper_layer": upper,
+            "lower_layer": lower,
+            "x_m": x,
+            "y_m": y,
+            "conductance_s": g,
+            "voltage_upper_v": vu,
+            "voltage_lower_v": vl,
+            "current_a": g * (vu - vl) if not (np.isnan(vu) or np.isnan(vl)) else None,
+            "power_w": g * (vu - vl) ** 2 if not (np.isnan(vu) or np.isnan(vl)) else None,
+        }
+        for (via_id, upper, lower, x, y, g, vu, vl) in fields.via_segment_detail
+    ]
+    diagnostics = [
+        {
+            "code": d.code,
+            "severity": d.severity.value,
+            "message": d.message,
+            "context": dict(d.context),
+        }
+        for d in result.diagnostics
+    ]
+    has_warnings = any(
+        d.severity in (DiagnosticSeverity.WARNING, DiagnosticSeverity.ERROR)
+        for d in result.diagnostics
+    ) or (convergence is not None and not convergence.get("converged", True))
+
+    quantities = _engineering_quantities(spec, result, fields)
+    metrics: dict[str, Any] = {
+        "schema": 1,
+        "kind": spec.kind.value,
+        "terminals": terminals,
+        "vias": vias,
+        "probes": [
+            {"probe_id": str(p.probe_id), "resistance_ohm": p.resistance_ohm} for p in result.probes
+        ],
+        "nets": [
+            {
+                "net_id": str(n.net_id),
+                "max_voltage_v": n.max_voltage_v,
+                "min_voltage_v": n.min_voltage_v,
+                "ir_drop_v": n.ir_drop_v,
+                "max_j_a_per_m2": n.max_current_density_a_per_m2,
+                "loss_w": n.resistive_loss_w,
+            }
+            for n in result.nets
+        ],
+        "conservation": {
+            "residual": fields.conservation.residual,
+            "current_imbalance_fraction": fields.conservation.imbalance_fraction,
+            "power_mismatch_fraction": fields.conservation.power_mismatch_fraction,
+            "source_total_a": fields.conservation.source_total_a,
+            "load_total_a": fields.conservation.load_total_a,
+            "net_input_power_w": fields.conservation.terminal_power_w,
+            "dissipated_power_w": fields.conservation.dissipated_power_w,
+        },
+        "quality": {
+            "mesh_nodes": result.stats.mesh_nodes,
+            "mesh_elements": result.stats.mesh_elements,
+            "matrix_nonzeros": fields.matrix_nonzeros,
+            "residual": result.stats.residual,
+            "accuracy": spec.accuracy.value,
+        },
+        "engineering_quantities": quantities,
+        "convergence": convergence,
+        "diagnostics": diagnostics,
+        "layer_files": layer_files,
+        "timings_s": timings,
+        "board_name": board.name,
+    }
+    (working / "metrics.json").write_text(json.dumps(metrics, sort_keys=True))
+
+    summary: dict[str, Any] = {
+        "kind": spec.kind.value,
+        "has_warnings": has_warnings,
+        "mesh_elements": result.stats.mesh_elements,
+        **dict(quantities.items()),
+    }
+    if convergence is not None:
+        summary["convergence_change"] = convergence["worst_relative_change"]
+        summary["converged"] = convergence["converged"]
+    return summary
+
+
+def _write_manifest(
+    working: Path,
+    spec: SimulationJobSpec,
+    result: ElectricalAnalysisResult,
+    timings: dict[str, float],
+    normalizer_version: str,
+) -> None:
+    """Provenance manifest: enough to reproduce and audit the run."""
+    manifest = {
+        "schema": 1,
+        "job_id": spec.job_id,
+        "spec": json.loads(spec.to_json()),
+        "signature": spec.signature,
+        "solver": {
+            "name": result.solver.name,
+            "version": result.solver.version,
+            "backend": result.solver.backend,
+        },
+        "fidelity": result.fidelity.value,
+        "app_version": get_version(),
+        "normalizer_version": normalizer_version,
+        "fem_version": SOLVER_VERSION,
+        "mesh_nodes": result.stats.mesh_nodes,
+        "mesh_elements": result.stats.mesh_elements,
+        "timings_s": timings,
+        "written_at_epoch_s": time.time(),
+    }
+    (working / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))

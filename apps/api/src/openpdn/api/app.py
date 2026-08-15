@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from openpdn.api.routes import boards_router, dev_router, system_router
+from openpdn.api.routes import boards_router, dev_router, simulation_router, system_router
 from openpdn.api.schemas import ErrorResponse
 from openpdn.application.errors import ApplicationError, BoardNotFoundError
 from openpdn.application.version import APPLICATION_NAME, get_version
@@ -77,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(system_router)
     app.include_router(boards_router)
+    app.include_router(simulation_router)
     if resolved.environment.value == "development" and resolved.dev_fixture is not None:
         app.include_router(dev_router)
     _register_exception_handlers(app)
