@@ -79,9 +79,10 @@ class FemSimulationPlanner:
         normalized: NormalizedGeometry,
         net_id: str,
         terminal_ids: Sequence[str],
+        via_ids: Sequence[str] = (),
     ) -> ConnectivityIssue | None:
-        """Region-graph reachability between the study's terminals."""
-        found = find_disconnection(board, normalized, net_id, terminal_ids)
+        """Region-graph reachability between the study's terminals and vias."""
+        found = find_disconnection(board, normalized, net_id, terminal_ids, via_ids)
         if found is None:
             return None
         message, terminal_a, terminal_b = found

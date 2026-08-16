@@ -11,6 +11,7 @@ from openpdn.domain.errors import InvalidStudyError
 from openpdn.domain.provenance import Quantity
 from openpdn.domain.study import (
     AnalysisStudy,
+    AttachmentGroup,
     CurrentLoad,
     LayerThicknessOverride,
     LoadId,
@@ -39,17 +40,29 @@ class TestStudyConstruction:
     def test_two_sources_on_one_terminal_are_rejected(self, simple_study: AnalysisStudy):
         duplicate = VoltageSource(
             id=SourceId("SRC2"),
-            terminal_id=TerminalId("T_SRC"),
+            attachment=AttachmentGroup(terminal_ids=(TerminalId("T_SRC"),)),
             voltage=Quantity.configured(1.0, VOLT),
         )
         with pytest.raises(InvalidStudyError, match="two sources"):
             dataclasses.replace(simple_study, sources=(*simple_study.sources, duplicate))
 
+    def test_a_load_on_the_same_terminal_as_a_source_is_rejected(self, simple_study: AnalysisStudy):
+        # Same node can't be both a fixed potential (source) and a fixed
+        # current draw (load); a solve would silently ignore the load's
+        # current rather than flag the conflict, so refuse it up front.
+        conflicting = CurrentLoad(
+            id=LoadId("L2"),
+            attachment=AttachmentGroup(terminal_ids=(TerminalId("T_SRC"),)),
+            current=Quantity.configured(1.0, AMPERE),
+        )
+        with pytest.raises(InvalidStudyError, match="both attach"):
+            dataclasses.replace(simple_study, loads=(*simple_study.loads, conflicting))
+
     def test_a_source_voltage_must_be_in_volts(self):
         with pytest.raises(Exception, match="V"):
             VoltageSource(
                 id=SourceId("SRC1"),
-                terminal_id=TerminalId("T"),
+                attachment=AttachmentGroup(terminal_ids=(TerminalId("T"),)),
                 voltage=Quantity.configured(0.85, AMPERE),
             )
 
@@ -77,7 +90,7 @@ class TestStudyAgainstBoard:
             loads=(
                 CurrentLoad(
                     id=LoadId("L2"),
-                    terminal_id=TerminalId("T_GHOST"),
+                    attachment=AttachmentGroup(terminal_ids=(TerminalId("T_GHOST"),)),
                     current=Quantity.configured(1.0, AMPERE),
                 ),
             ),

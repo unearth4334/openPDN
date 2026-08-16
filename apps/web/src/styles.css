@@ -1038,7 +1038,17 @@ tr[aria-selected="true"] {
   font-size: var(--font-size-small);
   padding: 2px 0;
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-picker__tree summary > :last-child {
+  margin-left: auto;
+}
+
+.terminal-picker__group-select {
+  cursor: pointer;
+  margin: 0;
 }
 
 .terminal-picker__count {
@@ -1072,6 +1082,20 @@ tr[aria-selected="true"] {
 .terminal-picker__item[aria-pressed="true"] {
   background: var(--accent);
   color: var(--surface-0);
+}
+
+.terminal-picker__checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-small);
+  padding: 2px 4px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.terminal-picker__checkbox-item:hover {
+  background: var(--surface-2);
 }
 
 /* --- Jobs table ------------------------------------------------------------------ */

@@ -40,7 +40,7 @@ if TYPE_CHECKING:
         SimulationArtifactStore,
         SimulationPlanner,
     )
-    from openpdn.domain.board import Board, Terminal
+    from openpdn.domain.board import Board, Terminal, Via
 
 _logger = logging.getLogger(__name__)
 
@@ -113,7 +113,8 @@ class SimulationService:
             board,
             record.normalized,
             draft.net_id,
-            self._draft_terminals(draft),
+            self._draft_terminal_ids(draft),
+            self._draft_via_ids(draft),
         )
 
         source_digest = _board_digest(record)
@@ -121,10 +122,12 @@ class SimulationService:
             board_digest=source_digest,
             kind=draft.kind,
             net_id=draft.net_id,
-            source_terminal_id=draft.source_terminal_id,
+            source_terminal_ids=draft.source_terminal_ids,
+            source_via_ids=draft.source_via_ids,
             source_voltage_v=draft.source_voltage_v,
             loads=draft.loads,
-            to_terminal_id=draft.to_terminal_id,
+            to_terminal_ids=draft.to_terminal_ids,
+            to_via_ids=draft.to_via_ids,
             mesh=mesh,
             verify_convergence=verify,
             via_plating_m=draft.via_plating_m,
@@ -142,10 +145,12 @@ class SimulationService:
             board_name=board.name,
             net_id=draft.net_id,
             net_name=nets_by_id[draft.net_id].name,
-            source_terminal_id=draft.source_terminal_id,
+            source_terminal_ids=draft.source_terminal_ids,
+            source_via_ids=draft.source_via_ids,
             source_voltage_v=draft.source_voltage_v,
             loads=draft.loads,
-            to_terminal_id=draft.to_terminal_id,
+            to_terminal_ids=draft.to_terminal_ids,
+            to_via_ids=draft.to_via_ids,
             accuracy=draft.accuracy,
             mesh=mesh,
             verify_convergence=verify,
@@ -243,12 +248,19 @@ class SimulationService:
             raise BoardNotFoundError(f"Board {board_id!r} is not loaded")
         return record
 
-    def _draft_terminals(self, draft: SimulationDraft) -> list[str]:
-        terminals = [draft.source_terminal_id]
-        terminals.extend(load.terminal_id for load in draft.loads)
-        if draft.to_terminal_id is not None:
-            terminals.append(draft.to_terminal_id)
+    def _draft_terminal_ids(self, draft: SimulationDraft) -> list[str]:
+        terminals = [*draft.source_terminal_ids]
+        for load in draft.loads:
+            terminals.extend(load.terminal_ids)
+        terminals.extend(draft.to_terminal_ids)
         return terminals
+
+    def _draft_via_ids(self, draft: SimulationDraft) -> list[str]:
+        vias = [*draft.source_via_ids]
+        for load in draft.loads:
+            vias.extend(load.via_ids)
+        vias.extend(draft.to_via_ids)
+        return vias
 
     def _validate_references(self, draft: SimulationDraft, board: Board) -> None:
         nets_by_id = {str(net.id): net for net in board.nets}
@@ -257,13 +269,23 @@ class SimulationService:
         terminals: dict[str, Terminal] = {
             str(terminal.id): terminal for terminal in board.terminals
         }
-        for terminal_id in self._draft_terminals(draft):
+        for terminal_id in self._draft_terminal_ids(draft):
             terminal = terminals.get(terminal_id)
             if terminal is None:
                 raise SimulationRequestError(f"Unknown terminal {terminal_id!r}")
             if str(terminal.net_id) != draft.net_id:
                 raise SimulationRequestError(
                     f"Terminal {terminal.name!r} sits on net {terminal.net_id!r}, "
+                    f"not on the studied net {draft.net_id!r}"
+                )
+        vias: dict[str, Via] = {str(via.id): via for via in board.vias}
+        for via_id in self._draft_via_ids(draft):
+            via = vias.get(via_id)
+            if via is None:
+                raise SimulationRequestError(f"Unknown via {via_id!r}")
+            if str(via.net_id) != draft.net_id:
+                raise SimulationRequestError(
+                    f"Via {via_id!r} sits on net {via.net_id!r}, "
                     f"not on the studied net {draft.net_id!r}"
                 )
 
@@ -298,4 +320,4 @@ def _default_name(draft: SimulationDraft, board: Board) -> str:
 
 def loads_from_pairs(pairs: Sequence[tuple[str, float]]) -> tuple[LoadSpec, ...]:
     """Convenience for surfaces building loads from (terminal, current) pairs."""
-    return tuple(LoadSpec(terminal_id=t, current_a=c) for t, c in pairs)
+    return tuple(LoadSpec(current_a=c, terminal_ids=(t,)) for t, c in pairs)

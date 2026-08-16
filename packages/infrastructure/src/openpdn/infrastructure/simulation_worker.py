@@ -35,6 +35,7 @@ from openpdn.domain.provenance import Quantity
 from openpdn.domain.results import DiagnosticSeverity
 from openpdn.domain.study import (
     AnalysisStudy,
+    AttachmentGroup,
     CurrentLoad,
     LoadId,
     MeshSettings,
@@ -242,25 +243,25 @@ def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float
     sources = (
         VoltageSource(
             id=SourceId("source"),
-            terminal_id=_terminal(spec.source_terminal_id),
+            attachment=_attachment(spec.source_terminal_ids, spec.source_via_ids),
             voltage=Quantity.configured(spec.source_voltage_v, VOLT),
         ),
     )
     loads = tuple(
         CurrentLoad(
             id=LoadId(f"load-{index}"),
-            terminal_id=_terminal(load.terminal_id),
+            attachment=_attachment(load.terminal_ids, load.via_ids),
             current=Quantity.configured(load.current_a, AMPERE),
         )
         for index, load in enumerate(spec.loads)
     )
     probes: tuple[ResistanceProbe, ...] = ()
-    if spec.kind is SimulationKind.RESISTANCE and spec.to_terminal_id is not None:
+    if spec.kind is SimulationKind.RESISTANCE and spec.to_terminal_ids:
         probes = (
             ResistanceProbe(
                 id=ProbeId("probe"),
-                from_terminal_id=_terminal(spec.source_terminal_id),
-                to_terminal_id=_terminal(spec.to_terminal_id),
+                from_terminal_id=_terminal(spec.source_terminal_ids[0]),
+                to_terminal_id=_terminal(spec.to_terminal_ids[0]),
             ),
         )
         # Drive the normalised test current through the main excitation so
@@ -270,7 +271,7 @@ def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float
         loads = (
             CurrentLoad(
                 id=LoadId("probe-test-current"),
-                terminal_id=_terminal(spec.to_terminal_id),
+                attachment=_attachment(spec.to_terminal_ids, spec.to_via_ids),
                 current=Quantity.configured(PROBE_TEST_CURRENT_A, AMPERE),
             ),
         )
@@ -299,6 +300,16 @@ def _terminal(value: str) -> TerminalId:
     return RealTerminalId(value)
 
 
+def _attachment(terminal_ids: tuple[str, ...], via_ids: tuple[str, ...]) -> AttachmentGroup:
+    from openpdn.domain.board import TerminalId as RealTerminalId
+    from openpdn.domain.board import ViaId as RealViaId
+
+    return AttachmentGroup(
+        terminal_ids=tuple(RealTerminalId(t) for t in terminal_ids),
+        via_ids=tuple(RealViaId(v) for v in via_ids),
+    )
+
+
 def _net(value: str) -> NetId:
     from openpdn.domain.board import NetId as RealNetId
 
@@ -315,14 +326,8 @@ def _engineering_quantities(
     if result.probes:
         quantities["resistance_ohm"] = result.probes[0].resistance_ohm
     if spec.kind is SimulationKind.IR_DROP and result.terminals:
-        source_v = next(
-            (
-                t.voltage_v
-                for t in result.terminals
-                if str(t.terminal_id) == spec.source_terminal_id
-            ),
-            spec.source_voltage_v,
-        )
+        # `_terminal_results` always appends the study's one source first.
+        source_v = result.terminals[0].voltage_v
         worst = max((source_v - t.voltage_v) for t in result.terminals)
         quantities["worst_drop_v"] = worst
     j99 = _j99(fields)
@@ -440,9 +445,12 @@ def _write_artifacts(
             "terminal_id": str(t.terminal_id),
             "voltage_v": t.voltage_v,
             "current_a": t.current_a,
-            "is_source": str(t.terminal_id) == spec.source_terminal_id,
+            # `_terminal_results` always appends the study's one source first.
+            "is_source": index == 0,
+            "member_terminal_ids": [str(m) for m in t.member_terminal_ids],
+            "member_via_ids": [str(m) for m in t.member_via_ids],
         }
-        for t in result.terminals
+        for index, t in enumerate(result.terminals)
     ]
     vias = [
         {

@@ -24,7 +24,7 @@ from openpdn.domain.units import AMPERE, KELVIN, METRE, VOLT
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from openpdn.domain.board import Board, LayerId, NetId, TerminalId
+    from openpdn.domain.board import Board, LayerId, NetId, TerminalId, ViaId
 
 StudyId = NewType("StudyId", str)
 SourceId = NewType("SourceId", str)
@@ -44,15 +44,40 @@ class ViaModel(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class AttachmentGroup:
+    """Terminals and/or vias forming one equipotential/current group.
+
+    A source or load may drive more than one physical pad at once -- a BGA
+    power rail's dozens of pins, or a pin plus a nearby via barrel -- and this
+    is what makes that a single explicit modelling choice rather than an
+    accident of geometry. Every member is preserved; the solver never
+    collapses a group to one artificial coordinate.
+
+    A via member attaches at the via's contact node on its topmost connected
+    conductive layer, not across the whole barrel -- forcing every layer of
+    the via to the same potential would silently short out the barrel's own
+    resistance, which is exactly the quantity a via-current result reports.
+    """
+
+    terminal_ids: tuple[TerminalId, ...] = ()
+    via_ids: tuple[ViaId, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject an attachment with nothing to attach to."""
+        if not self.terminal_ids and not self.via_ids:
+            raise InvalidStudyError("An attachment group needs at least one terminal or via")
+
+
+@dataclass(frozen=True, slots=True)
 class VoltageSource:
-    """A terminal held at a fixed potential -- a Dirichlet boundary condition.
+    """An attachment held at a fixed potential -- a Dirichlet boundary condition.
 
     `internal_resistance` models a non-ideal supply; `None` means ideal, which
     is a modelling choice the result should carry forward to the user.
     """
 
     id: SourceId
-    terminal_id: TerminalId
+    attachment: AttachmentGroup
     voltage: Quantity
     internal_resistance: Quantity | None = None
 
@@ -68,13 +93,16 @@ class VoltageSource:
 
 @dataclass(frozen=True, slots=True)
 class CurrentLoad:
-    """A terminal sinking a fixed current -- a Neumann boundary condition.
+    """An attachment sinking a fixed current -- a Neumann boundary condition.
 
-    Positive `current` means current leaving the board into the load.
+    Positive `current` means current leaving the board into the load, shared
+    across every member of the attachment group (an equipotential-terminal
+    current-sharing model, per the terminal-groups design note; the exact
+    per-pad split within the group is not resolved, only the group total).
     """
 
     id: LoadId
-    terminal_id: TerminalId
+    attachment: AttachmentGroup
     current: Quantity
 
     def __post_init__(self) -> None:
@@ -189,9 +217,35 @@ class AnalysisStudy:
         _require_unique_ids("source", [source.id for source in self.sources])
         _require_unique_ids("load", [load.id for load in self.loads])
         _require_unique_ids("probe", [probe.id for probe in self.probes])
-        driven = [source.terminal_id for source in self.sources]
-        if len(set(driven)) != len(driven):
+        driven_terminals = [
+            terminal_id for source in self.sources for terminal_id in source.attachment.terminal_ids
+        ]
+        if len(set(driven_terminals)) != len(driven_terminals):
             raise InvalidStudyError(f"Study {self.id!r} drives a terminal from two sources")
+        driven_vias = [via_id for source in self.sources for via_id in source.attachment.via_ids]
+        if len(set(driven_vias)) != len(driven_vias):
+            raise InvalidStudyError(f"Study {self.id!r} drives a via from two sources")
+        source_members = {
+            member
+            for source in self.sources
+            for member in (*source.attachment.terminal_ids, *source.attachment.via_ids)
+        }
+        load_members = {
+            member
+            for load in self.loads
+            for member in (*load.attachment.terminal_ids, *load.attachment.via_ids)
+        }
+        overlap = source_members & load_members
+        if overlap:
+            # A source pins a node's potential (Dirichlet); a load draws a
+            # fixed current there (Neumann). The same node cannot honour
+            # both -- the solver would silently ignore the load's current
+            # instead of drawing it, which conservation only catches after
+            # a full solve. Refuse before meshing, where the mistake is
+            # cheap and the message points at the actual overlap.
+            raise InvalidStudyError(
+                f"Study {self.id!r}: a source and a load both attach to {sorted(overlap)!r}"
+            )
         if self.temperature is not None and self.temperature.require_unit(KELVIN) <= 0.0:
             raise InvalidStudyError("Study temperature must be above absolute zero")
         if (
@@ -235,16 +289,25 @@ class AnalysisStudy:
                 raise InvalidStudyError(f"Study {self.id!r} references unknown net {net_id!r}")
 
         known_terminals = board.terminals_by_id
-        referenced: list[tuple[str, TerminalId]] = [
-            *((f"source {source.id!r}", source.terminal_id) for source in self.sources),
-            *((f"load {load.id!r}", load.terminal_id) for load in self.loads),
+        known_vias = board.vias_by_id
+        referenced_terminals: list[tuple[str, TerminalId]] = [
+            *(
+                (f"source {source.id!r}", terminal_id)
+                for source in self.sources
+                for terminal_id in source.attachment.terminal_ids
+            ),
+            *(
+                (f"load {load.id!r}", terminal_id)
+                for load in self.loads
+                for terminal_id in load.attachment.terminal_ids
+            ),
             *(
                 (f"probe {probe.id!r}", terminal_id)
                 for probe in self.probes
                 for terminal_id in (probe.from_terminal_id, probe.to_terminal_id)
             ),
         ]
-        for owner, terminal_id in referenced:
+        for owner, terminal_id in referenced_terminals:
             terminal = known_terminals.get(terminal_id)
             if terminal is None:
                 raise InvalidStudyError(
@@ -253,6 +316,30 @@ class AnalysisStudy:
             if terminal.net_id not in self.net_id_set:
                 raise InvalidStudyError(
                     f"Study {self.id!r}: {owner} sits on net {terminal.net_id!r}, "
+                    "which is not under analysis"
+                )
+
+        referenced_vias: list[tuple[str, ViaId]] = [
+            *(
+                (f"source {source.id!r}", via_id)
+                for source in self.sources
+                for via_id in source.attachment.via_ids
+            ),
+            *(
+                (f"load {load.id!r}", via_id)
+                for load in self.loads
+                for via_id in load.attachment.via_ids
+            ),
+        ]
+        for owner, via_id in referenced_vias:
+            via = known_vias.get(via_id)
+            if via is None:
+                raise InvalidStudyError(
+                    f"Study {self.id!r}: {owner} references unknown via {via_id!r}"
+                )
+            if via.net_id not in self.net_id_set:
+                raise InvalidStudyError(
+                    f"Study {self.id!r}: {owner} sits on net {via.net_id!r}, "
                     "which is not under analysis"
                 )
 

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from openpdn.domain.board import NetId, TerminalId
+    from openpdn.domain.board import NetId, TerminalId, ViaId
     from openpdn.domain.study import ProbeId, StudyId
 
 
@@ -98,11 +98,20 @@ class SolverRunStats:
 
 @dataclass(frozen=True, slots=True)
 class TerminalResult:
-    """Potential and current at one terminal."""
+    """Potential and current at one source or load attachment group.
+
+    `terminal_id` is a representative id for display -- the group's first
+    member terminal, or a synthetic `via:<id>` label for a via-only group --
+    never a fabricated aggregate. `member_terminal_ids`/`member_via_ids` list
+    every physical pad and via the group actually merged; since the group is
+    equipotential by construction, `voltage_v` applies to every member.
+    """
 
     terminal_id: TerminalId
     voltage_v: float
     current_a: float
+    member_terminal_ids: tuple[TerminalId, ...] = ()
+    member_via_ids: tuple[ViaId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

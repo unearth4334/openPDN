@@ -31,6 +31,7 @@ from openpdn.domain.materials import COPPER_ANNEALED
 from openpdn.domain.provenance import Quantity
 from openpdn.domain.study import (
     AnalysisStudy,
+    AttachmentGroup,
     CurrentLoad,
     LoadId,
     SourceId,
@@ -166,14 +167,14 @@ def simple_study(simple_board: Board) -> AnalysisStudy:
         sources=(
             VoltageSource(
                 id=SourceId("SRC1"),
-                terminal_id=TerminalId("T_SRC"),
+                attachment=AttachmentGroup(terminal_ids=(TerminalId("T_SRC"),)),
                 voltage=Quantity.configured(0.85, VOLT),
             ),
         ),
         loads=(
             CurrentLoad(
                 id=LoadId("LOAD1"),
-                terminal_id=TerminalId("T_LOAD"),
+                attachment=AttachmentGroup(terminal_ids=(TerminalId("T_LOAD"),)),
                 current=Quantity.configured(4.0, AMPERE),
             ),
         ),

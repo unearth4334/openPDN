@@ -99,13 +99,21 @@ ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
 
 @dataclass(frozen=True, slots=True)
 class LoadSpec:
-    """One load terminal drawing a fixed current."""
+    """One load attachment group drawing a fixed current.
 
-    terminal_id: str
+    `terminal_ids`/`via_ids` may together name several pads and vias sharing
+    one current draw (a connector's ganged pins, a pin plus its via) --
+    the equipotential-group model, not a per-member split.
+    """
+
     current_a: float
+    terminal_ids: tuple[str, ...] = ()
+    via_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject non-physical load currents (untrusted input)."""
+        """Reject non-physical load currents and empty attachments (untrusted input)."""
+        if not self.terminal_ids and not self.via_ids:
+            raise SimulationRequestError("A load needs at least one terminal or via")
         if not math.isfinite(self.current_a) or self.current_a <= 0.0:
             raise SimulationRequestError(
                 f"Load current must be a finite positive number, got {self.current_a!r}"
@@ -150,18 +158,22 @@ class SimulationDraft:
     kind: SimulationKind
     board_id: str
     net_id: str
-    source_terminal_id: str
     accuracy: AccuracyProfile
+    source_terminal_ids: tuple[str, ...] = ()
+    source_via_ids: tuple[str, ...] = ()
     name: str = ""
     source_voltage_v: float = 0.0
     loads: tuple[LoadSpec, ...] = ()
-    to_terminal_id: str | None = None
+    to_terminal_ids: tuple[str, ...] = ()
+    to_via_ids: tuple[str, ...] = ()
     via_plating_m: float | None = None
 
     def __post_init__(self) -> None:
         """Validate the shape of the request (referential checks come later)."""
         if not math.isfinite(self.source_voltage_v):
             raise SimulationRequestError("Source voltage must be finite")
+        if not self.source_terminal_ids and not self.source_via_ids:
+            raise SimulationRequestError("A simulation needs at least one source terminal or via")
         if self.via_plating_m is not None and not (
             math.isfinite(self.via_plating_m) and 0.0 < self.via_plating_m < 1e-3
         ):
@@ -169,12 +181,40 @@ class SimulationDraft:
                 "Via plating assumption must be a positive thickness below 1 mm"
             )
         if self.kind is SimulationKind.RESISTANCE:
-            if self.to_terminal_id is None:
-                raise SimulationRequestError("A resistance study needs a second terminal")
-            if self.to_terminal_id == self.source_terminal_id:
-                raise SimulationRequestError("Resistance endpoints must differ")
+            # A resistance probe reports R between exactly two terminals
+            # (ADR-0010) -- it has no group or via-endpoint form. Accepting
+            # extra members here would merge them into the excitation's
+            # equipotential group (changing the measured resistance) while
+            # the probe result itself only ever names one representative
+            # terminal per side, silently hiding what was actually measured.
+            # Refuse the ambiguity instead of solving something the result
+            # can't fully describe.
+            if len(self.source_terminal_ids) != 1 or self.source_via_ids:
+                raise SimulationRequestError(
+                    "A resistance study's source must be exactly one terminal "
+                    "(no via, no additional group members)"
+                )
+            if len(self.to_terminal_ids) != 1 or self.to_via_ids:
+                raise SimulationRequestError(
+                    "A resistance study's second terminal must be exactly one "
+                    "terminal (no via, no additional group members)"
+                )
+            if self.source_terminal_ids[0] == self.to_terminal_ids[0]:
+                raise SimulationRequestError("Resistance endpoints must not share a terminal")
         if self.kind is SimulationKind.IR_DROP and not self.loads:
             raise SimulationRequestError("An IR-drop study needs at least one load")
+        source_members = {*self.source_terminal_ids, *self.source_via_ids}
+        load_members = {
+            member for load in self.loads for member in (*load.terminal_ids, *load.via_ids)
+        }
+        overlap = source_members & load_members
+        if overlap:
+            # A source pins a node's potential; a load draws a fixed current
+            # there. The same node cannot honour both -- refused here (not
+            # just in AnalysisStudy.__post_init__) so the estimate/queue
+            # request fails immediately instead of after a wasted mesh
+            # build and solve.
+            raise SimulationRequestError(f"A source and a load both attach to {sorted(overlap)!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,10 +229,12 @@ class SimulationJobSpec:
     board_name: str
     net_id: str
     net_name: str
-    source_terminal_id: str
+    source_terminal_ids: tuple[str, ...]
+    source_via_ids: tuple[str, ...]
     source_voltage_v: float
     loads: tuple[LoadSpec, ...]
-    to_terminal_id: str | None
+    to_terminal_ids: tuple[str, ...]
+    to_via_ids: tuple[str, ...]
     accuracy: AccuracyProfile
     mesh: ResolvedMeshSpec
     #: Verification profile: run a refined second mesh and compare.
@@ -205,7 +247,7 @@ class SimulationJobSpec:
     def to_json(self) -> str:
         """Serialise for durable storage."""
         payload: dict[str, Any] = {
-            "schema": 1,
+            "schema": 2,
             "job_id": self.job_id,
             "name": self.name,
             "kind": self.kind.value,
@@ -214,13 +256,19 @@ class SimulationJobSpec:
             "board_name": self.board_name,
             "net_id": self.net_id,
             "net_name": self.net_name,
-            "source_terminal_id": self.source_terminal_id,
+            "source_terminal_ids": list(self.source_terminal_ids),
+            "source_via_ids": list(self.source_via_ids),
             "source_voltage_v": self.source_voltage_v,
             "loads": [
-                {"terminal_id": load.terminal_id, "current_a": load.current_a}
+                {
+                    "terminal_ids": list(load.terminal_ids),
+                    "via_ids": list(load.via_ids),
+                    "current_a": load.current_a,
+                }
                 for load in self.loads
             ],
-            "to_terminal_id": self.to_terminal_id,
+            "to_terminal_ids": list(self.to_terminal_ids),
+            "to_via_ids": list(self.to_via_ids),
             "accuracy": self.accuracy.value,
             "mesh": {
                 "max_element_m": self.mesh.max_element_m,
@@ -238,8 +286,16 @@ class SimulationJobSpec:
 
     @classmethod
     def from_json(cls, raw: str) -> SimulationJobSpec:
-        """Deserialise a stored specification."""
+        """Deserialise a stored specification.
+
+        Schema 1 (pre-multi-attachment) rows persist in production and must
+        keep loading: their singular `source_terminal_id`/`to_terminal_id`/
+        per-load `terminal_id` upgrade to one-member plural groups here
+        rather than at the call site, so every reader gets the same shape.
+        """
         data = json.loads(raw)
+        source_terminal_ids = _upgrade_ids(data, "source_terminal_ids", "source_terminal_id")
+        to_terminal_ids = _upgrade_ids(data, "to_terminal_ids", "to_terminal_id")
         return cls(
             job_id=data["job_id"],
             name=data["name"],
@@ -249,13 +305,19 @@ class SimulationJobSpec:
             board_name=data["board_name"],
             net_id=data["net_id"],
             net_name=data["net_name"],
-            source_terminal_id=data["source_terminal_id"],
+            source_terminal_ids=source_terminal_ids,
+            source_via_ids=tuple(data.get("source_via_ids") or ()),
             source_voltage_v=data["source_voltage_v"],
             loads=tuple(
-                LoadSpec(terminal_id=item["terminal_id"], current_a=item["current_a"])
+                LoadSpec(
+                    terminal_ids=_upgrade_ids(item, "terminal_ids", "terminal_id"),
+                    via_ids=tuple(item.get("via_ids") or ()),
+                    current_a=item["current_a"],
+                )
                 for item in data["loads"]
             ),
-            to_terminal_id=data["to_terminal_id"],
+            to_terminal_ids=to_terminal_ids,
+            to_via_ids=tuple(data.get("to_via_ids") or ()),
             accuracy=AccuracyProfile(data["accuracy"]),
             mesh=ResolvedMeshSpec(
                 max_element_m=data["mesh"]["max_element_m"],
@@ -271,15 +333,26 @@ class SimulationJobSpec:
         )
 
 
+def _upgrade_ids(data: dict[str, Any], plural_key: str, singular_key: str) -> tuple[str, ...]:
+    """Read a schema-2 plural id list, falling back to a schema-1 singular id."""
+    plural = data.get(plural_key)
+    if plural is not None:
+        return tuple(plural)
+    singular = data.get(singular_key)
+    return (singular,) if singular else ()
+
+
 def analysis_signature(
     *,
     board_digest: str,
     kind: SimulationKind,
     net_id: str,
-    source_terminal_id: str,
+    source_terminal_ids: tuple[str, ...],
+    source_via_ids: tuple[str, ...],
     source_voltage_v: float,
     loads: tuple[LoadSpec, ...],
-    to_terminal_id: str | None,
+    to_terminal_ids: tuple[str, ...],
+    to_via_ids: tuple[str, ...],
     mesh: ResolvedMeshSpec,
     verify_convergence: bool,
     via_plating_m: float | None,
@@ -290,7 +363,15 @@ def analysis_signature(
 
     Identical signatures mean identical numerical outcomes (same code, same
     inputs); anything else -- including a solver version bump -- changes the
-    signature and therefore never silently reuses a stale result.
+    signature and therefore never silently reuses a stale result. Group
+    membership is order-independent, so terminal/via ids are sorted before
+    hashing: two drafts naming the same attachment group in a different pick
+    order must still be recognised as the same study.
+
+    This hashes group membership as sorted lists rather than the single
+    string schema 1 used, so a fresh queue of an old single-terminal study
+    produces a different signature than its schema-1 original -- duplicate
+    detection resets across this change, but never mismatches going forward.
     """
     digest = hashlib.sha256()
     payload = json.dumps(
@@ -298,9 +379,11 @@ def analysis_signature(
             "board": board_digest,
             "kind": kind.value,
             "net": net_id,
-            "source": [source_terminal_id, source_voltage_v],
-            "loads": sorted((load.terminal_id, load.current_a) for load in loads),
-            "to": to_terminal_id,
+            "source": [sorted(source_terminal_ids), sorted(source_via_ids), source_voltage_v],
+            "loads": sorted(
+                (sorted(load.terminal_ids), sorted(load.via_ids), load.current_a) for load in loads
+            ),
+            "to": [sorted(to_terminal_ids), sorted(to_via_ids)],
             "mesh": [
                 mesh.max_element_m,
                 mesh.min_element_m,

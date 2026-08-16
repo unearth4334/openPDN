@@ -270,19 +270,22 @@ export type JobState =
   | "cancelled";
 
 export interface SimulationLoadRequest {
-  terminal_id: string;
+  terminal_ids?: string[];
+  via_ids?: string[];
   current_a: number;
 }
 
 export interface SimulationDraftRequest {
   kind: SimulationKind;
   net_id: string;
-  source_terminal_id: string;
+  source_terminal_ids?: string[];
+  source_via_ids?: string[];
   accuracy: AccuracyProfile;
   name?: string;
   source_voltage_v?: number;
   loads?: SimulationLoadRequest[];
-  to_terminal_id?: string | null;
+  to_terminal_ids?: string[];
+  to_via_ids?: string[];
   via_plating_um?: number | null;
 }
 
@@ -337,6 +340,9 @@ export interface ResultMetrics {
     voltage_v: number;
     current_a: number;
     is_source: boolean;
+    // Absent on result artifacts published before multi-attachment groups.
+    member_terminal_ids?: string[];
+    member_via_ids?: string[];
   }[];
   vias: {
     via_id: string;

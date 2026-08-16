@@ -57,19 +57,23 @@ def find_disconnection(
     normalized: NormalizedGeometry,
     net_id: str,
     terminal_ids: Sequence[str],
+    via_ids: Sequence[str] = (),
 ) -> tuple[str, str, str] | None:
-    """Region-graph reachability between study terminals.
+    """Region-graph reachability between study terminals and vias.
 
     Regions are nodes; a via joins every studied region containing its
     position on a spanned conductive layer; terminals attach through their
-    pads. Returns `(message, terminal_a, terminal_b)` for the first failure,
-    or None when all terminals share one component. This is a cheap
-    pre-check; the solver verifies connectivity exactly on the real mesh.
+    pads. `via_ids` names vias that are themselves attachment points (a
+    source or load driving a via directly, with no terminal pad) and must
+    also land in the same component as everything else. Returns `(message,
+    endpoint_a, endpoint_b)` for the first failure, or None when every
+    terminal and via shares one component. This is a cheap pre-check; the
+    solver verifies connectivity exactly on the real mesh.
     """
     regions = [region for region in normalized.regions if str(region.net_id or "") == net_id]
     terminals_by_id = {str(t.id): t for t in board.terminals}
     if not regions:
-        first = terminal_ids[0] if terminal_ids else ""
+        first = terminal_ids[0] if terminal_ids else (via_ids[0] if via_ids else "")
         return (f"Net {net_id!r} has no copper geometry", first, "")
     polygons = [_to_shapely(region.polygon) for region in regions]
     layer_index = {layer.id: layer.index for layer in board.stackup.layers}
@@ -87,6 +91,8 @@ def find_disconnection(
         if ra != rb:
             parent[rb] = ra
 
+    wanted_vias = set(via_ids)
+    component_of_via: dict[str, int] = {}
     for via in normalized.vias:
         if str(via.net_id or "") != net_id:
             continue
@@ -102,6 +108,9 @@ def find_disconnection(
                 touched.append(index)
         for a, b in itertools.pairwise(touched):
             union(a, b)
+        if touched:
+            for raw_id in wanted_vias.intersection(str(member) for member in via.via_ids):
+                component_of_via.setdefault(raw_id, touched[0])
 
     pads_by_id = {pad.id: pad for pad in board.pads}
     component_of_terminal: dict[str, int] = {}
@@ -136,15 +145,27 @@ def find_disconnection(
                 terminal_id,
                 "",
             )
-    first = terminal_ids[0]
-    for other in terminal_ids[1:]:
-        if find(component_of_terminal[other]) != find(component_of_terminal[first]):
-            name_a = terminals_by_id[first].name
-            name_b = terminals_by_id[other].name
+    for via_id in via_ids:
+        if via_id not in component_of_via:
             return (
-                f"{name_a} and {name_b} lie on electrically disconnected copper "
+                f"Via {via_id!r} touches no copper of net {net_id!r}",
+                via_id,
+                "",
+            )
+
+    endpoints: list[tuple[str, int, str]] = [
+        (terminal_id, component_of_terminal[terminal_id], terminals_by_id[terminal_id].name)
+        for terminal_id in terminal_ids
+    ] + [(via_id, component_of_via[via_id], f"via {via_id}") for via_id in via_ids]
+    if not endpoints:
+        return None
+    first_id, first_component, first_name = endpoints[0]
+    for other_id, other_component, other_name in endpoints[1:]:
+        if find(other_component) != find(first_component):
+            return (
+                f"{first_name} and {other_name} lie on electrically disconnected copper "
                 f"islands of net {net_id!r}",
-                first,
-                other,
+                first_id,
+                other_id,
             )
     return None

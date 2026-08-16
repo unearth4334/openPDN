@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from openpdn.domain.board import TerminalId
 from openpdn.domain.results import (
     Diagnostic,
     DiagnosticSeverity,
@@ -18,7 +19,7 @@ from openpdn.domain.units import AMPERE, VOLT
 from openpdn.solver.api import SolverCapabilities, SolverDescriptor
 
 if TYPE_CHECKING:
-    from openpdn.domain.board import Board, TerminalId
+    from openpdn.domain.board import Board
     from openpdn.domain.study import AnalysisStudy
 
 _SOLVER_NAME: Final = "mock"
@@ -54,14 +55,22 @@ class MockSolver:
         """Return placeholder results for `study`."""
         study.validate_against(board)
 
-        applied_voltage_v: dict[TerminalId, float] = {
-            source.terminal_id: source.voltage.require_unit(VOLT) for source in study.sources
-        }
+        applied_voltage_v: dict[TerminalId, float] = {}
+        for source in study.sources:
+            voltage = source.voltage.require_unit(VOLT)
+            for terminal_id in source.attachment.terminal_ids:
+                applied_voltage_v[terminal_id] = voltage
+            for via_id in source.attachment.via_ids:
+                applied_voltage_v[TerminalId(f"via:{via_id}")] = voltage
+
         drawn_current_a: dict[TerminalId, float] = {}
         for load in study.loads:
-            drawn_current_a[load.terminal_id] = drawn_current_a.get(
-                load.terminal_id, 0.0
-            ) + load.current.require_unit(AMPERE)
+            current = load.current.require_unit(AMPERE)
+            for terminal_id in load.attachment.terminal_ids:
+                drawn_current_a[terminal_id] = drawn_current_a.get(terminal_id, 0.0) + current
+            for via_id in load.attachment.via_ids:
+                key = TerminalId(f"via:{via_id}")
+                drawn_current_a[key] = drawn_current_a.get(key, 0.0) + current
 
         terminals = tuple(
             TerminalResult(

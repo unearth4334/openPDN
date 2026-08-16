@@ -43,9 +43,9 @@ from openpdn.solver.fem.mesh import RegionMesh, mesh_polygon
 if TYPE_CHECKING:
     import numpy.typing as npt
 
-    from openpdn.domain.board import Board, LayerId, NetId, PadId, TerminalId
+    from openpdn.domain.board import Board, LayerId, NetId, PadId, TerminalId, ViaId
     from openpdn.domain.geometry import Polygon2D
-    from openpdn.domain.study import AnalysisStudy
+    from openpdn.domain.study import AnalysisStudy, AttachmentGroup, LoadId, SourceId
     from openpdn.geometry.api import ConsolidatedVia, NormalizedGeometry
 
 
@@ -109,6 +109,10 @@ class SheetProblem:
     terminals: dict[TerminalId, TerminalBinding]
     via_segments: tuple[ViaSegment, ...]
     component_of_dof: npt.NDArray[np.int64]
+    #: DOF of each source/load's attachment group, after every member
+    #: terminal and via has been unioned into one equipotential node.
+    source_dofs: dict[SourceId, int]
+    load_dofs: dict[LoadId, int]
     diagnostics: tuple[Diagnostic, ...] = field(default_factory=tuple)
 
     @property
@@ -241,7 +245,16 @@ def build_problem(
     via_contacts = _bind_via_contacts(
         board, study, normalized, region_refs, region_meshes, via_params, union
     )
+    via_id_to_consolidated = {
+        raw_id: str(via.id) for via in normalized.vias for raw_id in via.via_ids
+    }
+    source_seeds, load_seeds = _bind_attachment_groups(
+        study, terminal_nodes, via_contacts, via_id_to_consolidated, union
+    )
     dof_of_node, n_dofs = _compress_dofs(union)
+
+    source_dofs = {source_id: int(dof_of_node[seed]) for source_id, seed in source_seeds.items()}
+    load_dofs = {load_id: int(dof_of_node[seed]) for load_id, seed in load_seeds.items()}
 
     via_segments = _via_segments(board, study, via_contacts, via_params, dof_of_node, diagnostics)
 
@@ -272,6 +285,8 @@ def build_problem(
         terminals=terminals,
         via_segments=via_segments,
         component_of_dof=component_of_dof,
+        source_dofs=source_dofs,
+        load_dofs=load_dofs,
         diagnostics=tuple(diagnostics),
     )
 
@@ -481,9 +496,9 @@ def _bind_terminal_nodes(
     """
     needed: set[TerminalId] = set()
     for source in study.sources:
-        needed.add(source.terminal_id)
+        needed.update(source.attachment.terminal_ids)
     for load in study.loads:
-        needed.add(load.terminal_id)
+        needed.update(load.attachment.terminal_ids)
     for probe in study.probes:
         needed.add(probe.from_terminal_id)
         needed.add(probe.to_terminal_id)
@@ -573,6 +588,54 @@ def _nearest_node_to(
         if best is None or d2[local] < best[0]:
             best = (float(d2[local]), ref.node_start + local)
     return [] if best is None else [best[1]]
+
+
+def _bind_attachment_groups(
+    study: AnalysisStudy,
+    terminal_nodes: dict[TerminalId, tuple[list[int], bool]],
+    via_contacts: dict[str, _ViaContact],
+    via_id_to_consolidated: dict[ViaId, str],
+    union: _UnionFind,
+) -> tuple[dict[SourceId, int], dict[LoadId, int]]:
+    """Union every source/load attachment group's members into one seed node.
+
+    A source or load may drive several terminals and vias at once (a BGA
+    rail's pins, a pin plus a nearby via); this is where that group becomes
+    one equipotential node, on top of the per-terminal and per-via-layer
+    collapses `_bind_terminal_nodes`/`_bind_via_contacts` already performed.
+    A via member contributes its *topmost connected layer's* node --
+    `connections` is ordered top-to-bottom by `_bind_via_contacts` -- so the
+    barrel's own interlayer resistance is preserved rather than shorted.
+
+    Returns the pre-compression seed node for each source/load; callers look
+    it up through `dof_of_node` once `_compress_dofs` has run.
+
+    Raises:
+        SolverConfigurationError: A via member touches no studied copper.
+    """
+
+    def _seed(attachment: AttachmentGroup) -> int:
+        seeds: list[int] = [
+            terminal_nodes[terminal_id][0][0] for terminal_id in attachment.terminal_ids
+        ]
+        for via_id in attachment.via_ids:
+            consolidated_id = via_id_to_consolidated.get(via_id)
+            contact = via_contacts.get(consolidated_id) if consolidated_id is not None else None
+            if contact is None or not contact.connections:
+                raise SolverConfigurationError(
+                    f"Via {via_id!r} touches no studied copper in the meshed geometry; "
+                    "it cannot carry current"
+                )
+            seeds.append(contact.connections[0][1])
+        for node in seeds[1:]:
+            union.union(seeds[0], node)
+        return seeds[0]
+
+    source_seeds: dict[SourceId, int] = {
+        source.id: _seed(source.attachment) for source in study.sources
+    }
+    load_seeds: dict[LoadId, int] = {load.id: _seed(load.attachment) for load in study.loads}
+    return source_seeds, load_seeds
 
 
 def _compress_dofs(union: _UnionFind) -> tuple[npt.NDArray[np.int64], int]:

@@ -53,9 +53,10 @@ router = APIRouter(prefix="/api", tags=["simulation"])
 
 
 class LoadRequest(BaseModel):
-    """One load terminal drawing a current."""
+    """One load attachment group drawing a current."""
 
-    terminal_id: str = Field(min_length=1, max_length=256)
+    terminal_ids: list[str] = Field(default_factory=list, max_length=256)
+    via_ids: list[str] = Field(default_factory=list, max_length=256)
     current_a: float = Field(gt=0.0, allow_inf_nan=False)
 
 
@@ -64,12 +65,14 @@ class SimulationDraftRequest(BaseModel):
 
     kind: Literal["ir_drop", "resistance"]
     net_id: str = Field(min_length=1, max_length=256)
-    source_terminal_id: str = Field(min_length=1, max_length=256)
+    source_terminal_ids: list[str] = Field(default_factory=list, max_length=256)
+    source_via_ids: list[str] = Field(default_factory=list, max_length=256)
     accuracy: Literal["preview", "standard", "high", "verification"]
     name: str = Field(default="", max_length=200)
     source_voltage_v: float = Field(default=0.0, allow_inf_nan=False)
     loads: list[LoadRequest] = Field(default_factory=list, max_length=64)
-    to_terminal_id: str | None = Field(default=None, max_length=256)
+    to_terminal_ids: list[str] = Field(default_factory=list, max_length=256)
+    to_via_ids: list[str] = Field(default_factory=list, max_length=256)
     via_plating_um: float | None = Field(default=None, gt=0.0, lt=1000.0)
 
     def to_draft(self, board_id: str) -> SimulationDraft:
@@ -78,15 +81,21 @@ class SimulationDraftRequest(BaseModel):
             kind=SimulationKind(self.kind),
             board_id=board_id,
             net_id=self.net_id,
-            source_terminal_id=self.source_terminal_id,
+            source_terminal_ids=tuple(self.source_terminal_ids),
+            source_via_ids=tuple(self.source_via_ids),
             accuracy=AccuracyProfile(self.accuracy),
             name=self.name,
             source_voltage_v=self.source_voltage_v,
             loads=tuple(
-                LoadSpec(terminal_id=load.terminal_id, current_a=load.current_a)
+                LoadSpec(
+                    current_a=load.current_a,
+                    terminal_ids=tuple(load.terminal_ids),
+                    via_ids=tuple(load.via_ids),
+                )
                 for load in self.loads
             ),
-            to_terminal_id=self.to_terminal_id,
+            to_terminal_ids=tuple(self.to_terminal_ids),
+            to_via_ids=tuple(self.to_via_ids),
             via_plating_m=None if self.via_plating_um is None else self.via_plating_um * 1e-6,
         )
 

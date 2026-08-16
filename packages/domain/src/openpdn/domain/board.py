@@ -384,6 +384,11 @@ class Board:
         return {terminal.id: terminal for terminal in self.terminals}
 
     @cached_property
+    def vias_by_id(self) -> Mapping[ViaId, Via]:
+        """Vias keyed by id."""
+        return {via.id: via for via in self.vias}
+
+    @cached_property
     def bounding_box(self) -> BoundingBox2D | None:
         """Extent of the board.
 

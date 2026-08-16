@@ -163,11 +163,14 @@ class SimulationPlanner(Protocol):
         normalized: NormalizedGeometry,
         net_id: str,
         terminal_ids: Sequence[str],
+        via_ids: Sequence[str] = (),
     ) -> ConnectivityIssue | None:
-        """Cheap region-graph reachability check between study terminals.
+        """Cheap region-graph reachability check between study terminals and vias.
 
-        Returns the first issue found, or None when every terminal pair is
-        connected through copper and vias. This is a pre-check; the solver
-        still verifies connectivity exactly on the real mesh.
+        `via_ids` names vias that are themselves attachment points, not just
+        the vias that happen to join copper along the way. Returns the first
+        issue found, or None when every terminal and via shares one
+        component. This is a pre-check; the solver still verifies
+        connectivity exactly on the real mesh.
         """
         ...

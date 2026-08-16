@@ -14,6 +14,7 @@ from openpdn.domain.provenance import Quantity
 from openpdn.domain.results import ElectricalAnalysisResult
 from openpdn.domain.study import (
     AnalysisStudy,
+    AttachmentGroup,
     CurrentLoad,
     LoadId,
     MeshSettings,
@@ -27,14 +28,17 @@ from openpdn.domain.units import AMPERE, METRE, VOLT
 from openpdn.geometry.shapely_engine import ShapelyGeometryNormalizer
 from openpdn.solver.fem import FemFieldData, FemSheetSolver
 from openpdn.solver.fem.errors import DisconnectedTerminalError
+from openpdn.solver.fem.plan import find_disconnection
 from tests.validation import analytical
 from tests.validation.boards import (
     COPPER_T_M,
     NET,
     disconnected_islands_board,
+    disconnected_islands_with_via_board,
     midplane_barrel_length_m,
     parallel_traces_board,
     series_widths_board,
+    split_terminal_parallel_traces_board,
     straight_trace_board,
     via_stack_board,
 )
@@ -59,7 +63,7 @@ def _resistance_study(mesh_target_m: float, name: str = "resistance") -> Analysi
         sources=(
             VoltageSource(
                 id=SourceId("src"),
-                terminal_id="term-a",  # type: ignore[arg-type]
+                attachment=AttachmentGroup(terminal_ids=("term-a",)),  # type: ignore[arg-type]
                 voltage=Quantity.configured(0.0, VOLT),
             ),
         ),
@@ -127,14 +131,14 @@ class TestCurrentScaling:
             sources=(
                 VoltageSource(
                     id=SourceId("src"),
-                    terminal_id="term-a",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-a",)),  # type: ignore[arg-type]
                     voltage=Quantity.configured(0.85, VOLT),
                 ),
             ),
             loads=(
                 CurrentLoad(
                     id=LoadId("load"),
-                    terminal_id="term-b",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-b",)),  # type: ignore[arg-type]
                     current=Quantity.configured(current_a, AMPERE),
                 ),
             ),
@@ -172,6 +176,101 @@ class TestParallelConductors:
         # 0.5 %: per-branch discretisation error, same order as the single
         # trace at this mesh density.
         assert r == pytest.approx(expected, rel=5e-3)
+
+
+class TestAttachmentGroups:
+    """A source/load naming several terminals must merge them to one DOF.
+
+    `split_terminal_parallel_traces_board` keeps each pad its own terminal
+    (unlike `parallel_traces_board`'s multi-pad terminals), so only the
+    attachment-group union under test can put two of them on one node.
+    """
+
+    def test_grouped_terminals_reproduce_the_multi_pad_terminal_result(self):
+        length = 20e-3
+        w1, w2 = 1e-3, 0.5e-3
+        board = split_terminal_parallel_traces_board(
+            length_between_pads_m=length, width_1_m=w1, width_2_m=w2
+        )
+        r1 = analytical.trace_resistance_ohm(length, w1, COPPER_T_M)
+        r2 = analytical.trace_resistance_ohm(length, w2, COPPER_T_M)
+        expected = analytical.parallel_resistance_ohm(r1, r2)
+        current_a = 1.0
+        study = AnalysisStudy(
+            id=StudyId("grouped-resistance"),
+            name="grouped resistance",
+            board_id=str(board.id),
+            net_ids=(NET,),
+            sources=(
+                VoltageSource(
+                    id=SourceId("src"),
+                    attachment=AttachmentGroup(
+                        terminal_ids=("term-a1", "term-a2")  # type: ignore[arg-type]
+                    ),
+                    voltage=Quantity.configured(0.85, VOLT),
+                ),
+            ),
+            loads=(
+                CurrentLoad(
+                    id=LoadId("load"),
+                    attachment=AttachmentGroup(
+                        terminal_ids=("term-b1", "term-b2")  # type: ignore[arg-type]
+                    ),
+                    current=Quantity.configured(current_a, AMPERE),
+                ),
+            ),
+            mesh=_mesh(0.25e-3),
+        )
+        result = FemSheetSolver(normalizer=ShapelyGeometryNormalizer()).solve(board, study)
+        assert result.terminals[0].member_terminal_ids == ("term-a1", "term-a2")
+        assert result.terminals[1].member_terminal_ids == ("term-b1", "term-b2")
+        v_a = result.terminals[0].voltage_v
+        v_b = result.terminals[1].voltage_v
+        r = (v_a - v_b) / current_a
+        # 0.5 %: same discretisation order as TestParallelConductors, which
+        # this reproduces using two independent terminals unioned by the
+        # attachment group instead of one terminal with two pads.
+        assert r == pytest.approx(expected, rel=5e-3)
+
+    def test_grouped_load_current_is_the_group_total_not_a_per_member_multiple(self):
+        length = 20e-3
+        w1, w2 = 1e-3, 0.5e-3
+        board = split_terminal_parallel_traces_board(
+            length_between_pads_m=length, width_1_m=w1, width_2_m=w2
+        )
+        study = AnalysisStudy(
+            id=StudyId("grouped-load"),
+            name="grouped load",
+            board_id=str(board.id),
+            net_ids=(NET,),
+            sources=(
+                VoltageSource(
+                    id=SourceId("src"),
+                    attachment=AttachmentGroup(terminal_ids=("term-a1",)),  # type: ignore[arg-type]
+                    voltage=Quantity.configured(0.85, VOLT),
+                ),
+            ),
+            loads=(
+                CurrentLoad(
+                    id=LoadId("load"),
+                    attachment=AttachmentGroup(
+                        terminal_ids=("term-b1", "term-b2")  # type: ignore[arg-type]
+                    ),
+                    current=Quantity.configured(2.0, AMPERE),
+                ),
+            ),
+            mesh=_mesh(0.25e-3),
+        )
+        result, fields = FemSheetSolver(normalizer=ShapelyGeometryNormalizer()).solve_with_fields(
+            board, study
+        )
+        # Direct solve: current balance is numerical noise, not an accounting
+        # bug. If the group merge silently duplicated the DOF, this would be
+        # off by an integer multiple of 2 A instead.
+        assert fields.conservation.imbalance_fraction < 1e-9
+        assert result.terminals[0].current_a == pytest.approx(2.0, rel=1e-9)
+        assert result.terminals[0].member_terminal_ids == ("term-a1",)
+        assert result.terminals[1].member_terminal_ids == ("term-b1", "term-b2")
 
 
 class TestSeriesGeometry:
@@ -223,6 +322,71 @@ class TestViaResistance:
         assert r == pytest.approx(expected, rel=1e-9)
 
 
+class TestViaOnlyAttachment:
+    """A source/load may drive a via directly, with no terminal pad at all.
+
+    This is the case `find_disconnection` must not falsely refuse (a via has
+    no pad, so the terminal-only connectivity walk sees nothing there) and
+    that `_bind_attachment_groups` must resolve without a `TerminalId` to key
+    on (simulation-jobs skill: attachment groups may be via-only).
+    """
+
+    def test_connectivity_check_accepts_a_via_only_endpoint(self):
+        hole, plating = 0.3e-3, 25e-6
+        board = via_stack_board(layer_count=2, finished_hole_m=hole, plating_m=plating)
+        normalized = ShapelyGeometryNormalizer().normalize(board)
+        issue = find_disconnection(
+            board, normalized, str(NET), terminal_ids=["term-b"], via_ids=["via-1"]
+        )
+        assert issue is None
+
+    def test_connectivity_check_flags_a_via_on_a_disconnected_island(self):
+        board = disconnected_islands_with_via_board()
+        normalized = ShapelyGeometryNormalizer().normalize(board)
+        issue = find_disconnection(
+            board, normalized, str(NET), terminal_ids=["term-b"], via_ids=["via-island-a"]
+        )
+        assert issue is not None
+        message, endpoint_a, endpoint_b = issue
+        assert "disconnected" in message
+        assert {endpoint_a, endpoint_b} == {"term-b", "via-island-a"}
+
+    def test_via_only_source_matches_the_exact_barrel_resistance(self):
+        hole, plating = 0.3e-3, 25e-6
+        board = via_stack_board(layer_count=2, finished_hole_m=hole, plating_m=plating)
+        length = midplane_barrel_length_m(board, "L1", "L2")
+        expected = analytical.via_barrel_resistance_ohm(length, hole, plating)
+        current_a = 1.0
+        study = AnalysisStudy(
+            id=StudyId("via-only-source"),
+            name="via-only source",
+            board_id=str(board.id),
+            net_ids=(NET,),
+            sources=(
+                VoltageSource(
+                    id=SourceId("src"),
+                    attachment=AttachmentGroup(via_ids=("via-1",)),  # type: ignore[arg-type]
+                    voltage=Quantity.configured(0.0, VOLT),
+                ),
+            ),
+            loads=(
+                CurrentLoad(
+                    id=LoadId("load"),
+                    attachment=AttachmentGroup(terminal_ids=("term-b",)),  # type: ignore[arg-type]
+                    current=Quantity.configured(current_a, AMPERE),
+                ),
+            ),
+            mesh=_mesh(0.1e-3),
+        )
+        result = FemSheetSolver(normalizer=ShapelyGeometryNormalizer()).solve(board, study)
+        assert result.terminals[0].member_terminal_ids == ()
+        assert result.terminals[0].member_via_ids == ("via-1",)
+        v_src = result.terminals[0].voltage_v
+        v_load = result.terminals[1].voltage_v
+        r = (v_src - v_load) / current_a
+        assert r == pytest.approx(expected, rel=1e-9)
+
+
 class TestConservationAndPower:
     """Current balance and energy consistency on an IR-drop study."""
 
@@ -236,14 +400,14 @@ class TestConservationAndPower:
             sources=(
                 VoltageSource(
                     id=SourceId("src"),
-                    terminal_id="term-a",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-a",)),  # type: ignore[arg-type]
                     voltage=Quantity.configured(0.85, VOLT),
                 ),
             ),
             loads=(
                 CurrentLoad(
                     id=LoadId("load"),
-                    terminal_id="term-b",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-b",)),  # type: ignore[arg-type]
                     current=Quantity.configured(2.0, AMPERE),
                 ),
             ),
@@ -294,14 +458,14 @@ class TestDisconnectedCopper:
             sources=(
                 VoltageSource(
                     id=SourceId("src"),
-                    terminal_id="term-a",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-a",)),  # type: ignore[arg-type]
                     voltage=Quantity.configured(1.0, VOLT),
                 ),
             ),
             loads=(
                 CurrentLoad(
                     id=LoadId("load"),
-                    terminal_id="term-b",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-b",)),  # type: ignore[arg-type]
                     current=Quantity.configured(1.0, AMPERE),
                 ),
             ),
@@ -324,14 +488,14 @@ class TestCurrentDensity:
             sources=(
                 VoltageSource(
                     id=SourceId("src"),
-                    terminal_id="term-a",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-a",)),  # type: ignore[arg-type]
                     voltage=Quantity.configured(0.85, VOLT),
                 ),
             ),
             loads=(
                 CurrentLoad(
                     id=LoadId("load"),
-                    terminal_id="term-b",  # type: ignore[arg-type]
+                    attachment=AttachmentGroup(terminal_ids=("term-b",)),  # type: ignore[arg-type]
                     current=Quantity.configured(2.0, AMPERE),
                 ),
             ),

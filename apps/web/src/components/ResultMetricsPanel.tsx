@@ -117,28 +117,39 @@ export function ResultMetricsPanel({ metrics }: { metrics: ResultMetrics }) {
               </tr>
             </thead>
             <tbody>
-              {metrics.terminals.map((terminal) => (
-                <tr key={terminal.terminal_id}>
-                  <td>
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() =>
-                        dispatch({
-                          type: "terminals-highlighted",
-                          terminalIds: [terminal.terminal_id],
-                        })
-                      }
-                    >
-                      {terminal.terminal_id}
-                    </button>
-                  </td>
-                  <td className="numeric">
-                    {terminal.is_source ? "source" : `${terminal.current_a.toFixed(3)} A`}
-                  </td>
-                  <td className="numeric">{terminal.voltage_v.toFixed(5)} V</td>
-                </tr>
-              ))}
+              {metrics.terminals.map((terminal) => {
+                const memberTerminalIds = terminal.member_terminal_ids?.length
+                  ? terminal.member_terminal_ids
+                  : [terminal.terminal_id];
+                const memberViaIds = terminal.member_via_ids ?? [];
+                const memberCount = memberTerminalIds.length + memberViaIds.length;
+                return (
+                  <tr key={terminal.terminal_id}>
+                    <td>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => {
+                          dispatch({
+                            type: "terminals-highlighted",
+                            terminalIds: memberTerminalIds,
+                          });
+                          dispatch({ type: "via-group-highlighted", viaIds: memberViaIds });
+                        }}
+                      >
+                        {terminal.terminal_id}
+                      </button>
+                      {memberCount > 1 ? (
+                        <span className="sim-note"> (+{memberCount - 1} more)</span>
+                      ) : null}
+                    </td>
+                    <td className="numeric">
+                      {terminal.is_source ? "source" : `${terminal.current_a.toFixed(3)} A`}
+                    </td>
+                    <td className="numeric">{terminal.voltage_v.toFixed(5)} V</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </>

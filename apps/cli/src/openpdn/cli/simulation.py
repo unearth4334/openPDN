@@ -153,8 +153,8 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
             kind=SimulationKind.RESISTANCE,
             board_id=review.board_id,
             net_id=net_id,
-            source_terminal_id=_resolve_terminal(board, args.from_terminal, net_id),
-            to_terminal_id=_resolve_terminal(board, args.to_terminal, net_id),
+            source_terminal_ids=(_resolve_terminal(board, args.from_terminal, net_id),),
+            to_terminal_ids=(_resolve_terminal(board, args.to_terminal, net_id),),
             accuracy=AccuracyProfile(args.accuracy),
             via_plating_m=plating_m,
         )
@@ -166,15 +166,15 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
                 raise SimulationRequestError(f"Load {item!r} is not TERMINAL=AMPS")
             loads.append(
                 LoadSpec(
-                    terminal_id=_resolve_terminal(board, terminal, net_id),
                     current_a=float(amps),
+                    terminal_ids=(_resolve_terminal(board, terminal, net_id),),
                 )
             )
         draft = SimulationDraft(
             kind=SimulationKind.IR_DROP,
             board_id=review.board_id,
             net_id=net_id,
-            source_terminal_id=_resolve_terminal(board, args.source_terminal, net_id),
+            source_terminal_ids=(_resolve_terminal(board, args.source_terminal, net_id),),
             source_voltage_v=args.voltage,
             loads=tuple(loads),
             accuracy=AccuracyProfile(args.accuracy),

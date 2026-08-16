@@ -195,6 +195,47 @@ def parallel_traces_board(
     )
 
 
+def split_terminal_parallel_traces_board(
+    *,
+    length_between_pads_m: float,
+    width_1_m: float,
+    width_2_m: float,
+    pad_length_m: float = 1e-3,
+) -> Board:
+    """Two disjoint traces, each pad its own single-pad terminal.
+
+    Identical geometry to `parallel_traces_board`, but where that board wires
+    each side's two pads into one multi-pad `Terminal` (exercising the
+    existing per-terminal pad union), this board keeps all four pads as four
+    independent terminals -- so a source/load attachment *group* naming two
+    of them is the only thing that can put them on one equipotential DOF.
+    """
+    total = length_between_pads_m + 2.0 * pad_length_m
+    gap = 2e-3
+    y2 = width_1_m + gap
+
+    pad_a1, term_a1 = rect_pad_terminal("a1", "L1", 0.0, 0.0, pad_length_m, width_1_m)
+    pad_a2, term_a2 = rect_pad_terminal("a2", "L1", 0.0, y2, pad_length_m, width_2_m)
+    pad_b1, term_b1 = rect_pad_terminal(
+        "b1", "L1", total - pad_length_m, 0.0, pad_length_m, width_1_m
+    )
+    pad_b2, term_b2 = rect_pad_terminal(
+        "b2", "L1", total - pad_length_m, y2, pad_length_m, width_2_m
+    )
+    return Board(
+        id=BoardId("val-split-parallel"),
+        name="validation split-terminal parallel traces",
+        stackup=Stackup((conductive_layer("L1", 0),)),
+        nets=(Net(id=NET, name="DUT"),),
+        copper_regions=(
+            rect_region("trace-1", "L1", 0.0, 0.0, total, width_1_m),
+            rect_region("trace-2", "L1", 0.0, y2, total, width_2_m),
+        ),
+        pads=(pad_a1, pad_a2, pad_b1, pad_b2),
+        terminals=(term_a1, term_a2, term_b1, term_b2),
+    )
+
+
 def series_widths_board(
     *,
     length_each_m: float,
@@ -311,6 +352,40 @@ def disconnected_islands_board() -> Board:
             rect_region("island-a", "L1", 0.0, 0.0, 3e-3, 1e-3),
             rect_region("island-b", "L1", 8e-3, 0.0, 3e-3, 1e-3),
         ),
+        pads=(pad_a, pad_b),
+        terminals=(term_a, term_b),
+    )
+
+
+def disconnected_islands_with_via_board() -> Board:
+    """Two same-net islands on L1, plus a via sitting only on island A.
+
+    `find_disconnection` must treat the via as an endpoint candidate in its
+    own right (it has no pad, so a terminal-only connectivity walk cannot
+    see it) and still report island A and island B as disconnected when a
+    via on A is checked against a terminal on B.
+    """
+    pad_a, term_a = rect_pad_terminal("a", "L1", 0.0, 0.0, 1e-3, 1e-3)
+    pad_b, term_b = rect_pad_terminal("b", "L1", 10e-3, 0.0, 1e-3, 1e-3)
+    via = Via(
+        id=ViaId("via-island-a"),
+        net_id=NET,
+        from_layer_id=LayerId("L1"),
+        to_layer_id=LayerId("L2"),
+        position=Point2D(1.5e-3, 0.5e-3),
+        finished_hole_diameter=Quantity.imported(0.3e-3, METRE),
+        plating_thickness=Quantity.imported(25e-6, METRE),
+    )
+    return Board(
+        id=BoardId("val-islands-via"),
+        name="validation disconnected islands with via",
+        stackup=Stackup((conductive_layer("L1", 0), conductive_layer("L2", 1))),
+        nets=(Net(id=NET, name="DUT"),),
+        copper_regions=(
+            rect_region("island-a", "L1", 0.0, 0.0, 3e-3, 1e-3),
+            rect_region("island-b", "L1", 8e-3, 0.0, 3e-3, 1e-3),
+        ),
+        vias=(via,),
         pads=(pad_a, pad_b),
         terminals=(term_a, term_b),
     )

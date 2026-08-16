@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
+from openpdn.domain.board import TerminalId
 from openpdn.domain.results import (
     Diagnostic,
     DiagnosticSeverity,
@@ -51,8 +52,8 @@ from openpdn.solver.fem.solve import Excitation, Solution, solve_excitation
 if TYPE_CHECKING:
     import numpy.typing as npt
 
-    from openpdn.domain.board import Board, TerminalId
-    from openpdn.domain.study import AnalysisStudy
+    from openpdn.domain.board import Board
+    from openpdn.domain.study import AnalysisStudy, AttachmentGroup
     from openpdn.geometry.api import GeometryNormalizer
 
 SOLVER_NAME: Final = "fem-2p5d"
@@ -234,23 +235,23 @@ def _solve_prepared(
 
     dirichlet: dict[int, float] = {}
     for source in study.sources:
-        binding = problem.terminals[source.terminal_id]
+        dof = problem.source_dofs[source.id]
         voltage = source.voltage.require_unit(VOLT)
-        existing = dirichlet.get(binding.dof)
+        existing = dirichlet.get(dof)
         if existing is not None and existing != voltage:
             raise SolverConfigurationError(
                 f"Two sources drive the same copper at different potentials "
-                f"({existing} V and {voltage} V); their pads share a terminal region"
+                f"({existing} V and {voltage} V); their attachments share a terminal or via"
             )
-        dirichlet[binding.dof] = voltage
+        dirichlet[dof] = voltage
 
     injected: dict[int, float] = {}
     load_drawn_by_dof: dict[int, float] = {}
     for load in study.loads:
-        binding = problem.terminals[load.terminal_id]
+        dof = problem.load_dofs[load.id]
         drawn = load.current.require_unit(AMPERE)
-        injected[binding.dof] = injected.get(binding.dof, 0.0) - drawn
-        load_drawn_by_dof[binding.dof] = load_drawn_by_dof.get(binding.dof, 0.0) + drawn
+        injected[dof] = injected.get(dof, 0.0) - drawn
+        load_drawn_by_dof[dof] = load_drawn_by_dof.get(dof, 0.0) + drawn
 
     solution = solve_excitation(problem, Excitation(dirichlet, injected))
     fields = element_fields(problem, solution)
@@ -357,37 +358,53 @@ def _conservation_diagnostics(
         )
 
 
+def _representative_terminal_id(attachment: AttachmentGroup) -> TerminalId:
+    """A display id for an attachment group: its first terminal, or a via label.
+
+    Never a fabricated aggregate -- just which real member stands in for the
+    group in places (CLI output, legacy single-terminal callers) that expect
+    one id. `member_terminal_ids`/`member_via_ids` carry the full membership.
+    """
+    if attachment.terminal_ids:
+        return attachment.terminal_ids[0]
+    return TerminalId(f"via:{attachment.via_ids[0]}")
+
+
 def _terminal_results(
     problem: SheetProblem,
     study: AnalysisStudy,
     solution: Solution,
     load_drawn_by_dof: dict[int, float],
 ) -> tuple[TerminalResult, ...]:
-    """Voltage and current at every study terminal."""
+    """Voltage and current at every source/load attachment group."""
     results: list[TerminalResult] = []
-    seen: set[TerminalId] = set()
+    seen_dofs: set[int] = set()
     for source in study.sources:
-        binding = problem.terminals[source.terminal_id]
+        dof = problem.source_dofs[source.id]
         results.append(
             TerminalResult(
-                terminal_id=source.terminal_id,
-                voltage_v=float(solution.voltage_v[binding.dof]),
-                current_a=float(solution.source_current_a.get(binding.dof, 0.0)),
+                terminal_id=_representative_terminal_id(source.attachment),
+                voltage_v=float(solution.voltage_v[dof]),
+                current_a=float(solution.source_current_a.get(dof, 0.0)),
+                member_terminal_ids=source.attachment.terminal_ids,
+                member_via_ids=source.attachment.via_ids,
             )
         )
-        seen.add(source.terminal_id)
+        seen_dofs.add(dof)
     for load in study.loads:
-        if load.terminal_id in seen:
+        dof = problem.load_dofs[load.id]
+        if dof in seen_dofs:
             continue
-        binding = problem.terminals[load.terminal_id]
         results.append(
             TerminalResult(
-                terminal_id=load.terminal_id,
-                voltage_v=float(solution.voltage_v[binding.dof]),
-                current_a=float(load_drawn_by_dof.get(binding.dof, 0.0)),
+                terminal_id=_representative_terminal_id(load.attachment),
+                voltage_v=float(solution.voltage_v[dof]),
+                current_a=float(load_drawn_by_dof.get(dof, 0.0)),
+                member_terminal_ids=load.attachment.terminal_ids,
+                member_via_ids=load.attachment.via_ids,
             )
         )
-        seen.add(load.terminal_id)
+        seen_dofs.add(dof)
     return tuple(results)
 
 
