@@ -74,7 +74,7 @@ and dimming, stackup cross-section, via review with cross-probing, structured
 import diagnostics and simulation readiness, imported vs normalized geometry
 views. A WebGL backend arrives with scalar-field overlays.
 
-## Next — M4: first electrical vertical slice
+## M4 — first electrical vertical slice (delivered)
 
 ```text
 IPC-2581 board
@@ -89,6 +89,7 @@ effective terminal-to-terminal resistance
 Validated against `R = L/(σwt)` with a stated tolerance and a convergence
 check. Only then may an analysis capability move from *planned* to
 *implemented*, and only then does `mock` stop being the default solver.
+Delivered: `fem-2p5d` is the default solver and is in `VALIDATED_SOLVERS`.
 
 Then, in order: voltage map, current-density map, via current.
 
@@ -102,6 +103,31 @@ validated against parallel-barrel references.
 Resistive power-loss density, resistance-contribution ranking along a path, and
 richer probe support.
 
+## Next — the Reference accuracy tier
+
+The existing Preview/Standard/High/Verification ladder is four fixed mesh
+densities over linear elements. Reference is a different kind of answer:
+quadratic elements, an error estimator, and an adaptive loop that keeps
+refining where the error actually is until the engineering quantity has
+converged — or reports plainly that it did not.
+
+```text
+solve → estimate error → mark → re-mesh → solve → ...
+     → converged, or a stated resource/model limit
+```
+
+Decided in ADR-0012 (P2 elements), ADR-0013 (goal-oriented adaptive
+refinement), ADR-0014 (optional PETSc/AMG backend beside the direct solve) and
+ADR-0015 (Reference job semantics and result quality states). Durable rules
+live in `.agents/skills/reference-fem/SKILL.md`.
+
+Phased deliberately, because each piece has to be validated on its own before
+it can be trusted in combination: P2 against manufactured solutions and
+observed convergence order; adaptivity against uniform refinement on real
+board geometry; the iterative backend against the direct one. The tier is
+defined by that evidence, not by element count — "Verification with more
+divisions" is explicitly not what this is.
+
 ## Later
 
 * **ODB++ importer.** The second adapter, judged against the same canonical
@@ -114,4 +140,7 @@ richer probe support.
   earn their keep.
 * Persistence, once there is a requirement to keep boards and studies between
   sessions. A database before that is speculation.
-* Long-running solves as jobs, once a solve is long enough to need it.
+* Local 3-D refinement of a region selected from a Reference result (via
+  arrays, connector transitions, plane neck-downs), behind the same solver
+  contract. Reference deliberately keeps its interfaces compatible with this;
+  it does not couple to a 3-D backend today.

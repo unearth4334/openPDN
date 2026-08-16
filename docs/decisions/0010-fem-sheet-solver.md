@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted.
+Accepted. Extended by ADR-0012 (quadratic elements as an additional element
+order for the Reference tier; P1 below remains the default), ADR-0013
+(estimator-driven adaptive re-meshing over the sizing field decided in §2) and
+ADR-0014 (an optional iterative backend beside the direct solve of §5, which
+§5 already anticipated). None of them supersede the formulation, the meshing
+strategy, the terminal and via treatment, or the conservation rules below.
 
 ## Context
 

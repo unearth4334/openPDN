@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended by ADR-0015: a Reference job freezes an adaptive *policy*
+rather than resolved mesh numbers, because under goal-oriented adaptivity the
+mesh is an output of the run. The queue, lease, retry and artifact decisions
+below are untouched, and ADR-0015 preserves the reason this ADR froze absolute
+numbers in the first place.
 
 ## Context
 

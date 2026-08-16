@@ -168,3 +168,12 @@ Do not start a large general-purpose FEM engine, and do not reimplement
 padne/FYPA. The first milestone is the smallest correct 2.5-D path for a single
 net on a single layer, validated against `R = L/(σwt)`, then extended to
 multiple layers with lumped vias.
+
+That milestone is done. The one deliberate, bounded exception to the rule above
+is the **Reference accuracy tier** — quadratic elements, goal-oriented adaptive
+refinement and an optional iterative backend — scoped by ADR-0012 through
+ADR-0015 and governed by `.agents/skills/reference-fem/SKILL.md`. Read that
+skill before touching P2, adaptivity, error estimators or Reference job code.
+It is an extension of the pipeline on this page, not a parallel one, and it is
+still not a licence to build a general-purpose FEM engine: anything beyond what
+those four ADRs decided needs its own ADR.

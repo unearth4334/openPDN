@@ -16,6 +16,10 @@ Short records of decisions that are expensive to reverse. Each has **Status**,
 | [0009](0009-board-store-and-geometry-transport.md) | In-memory board store keyed by content + pipeline versions; coarse geometry transport | Accepted |
 | [0010](0010-fem-sheet-solver.md) | In-house 2.5-D sheet FEM: filtered-Delaunay meshing, contact-region terminals, exact via annuli, SuperLU direct solve | Accepted |
 | [0011](0011-simulation-jobs.md) | Durable simulation jobs: SQLite queue, isolated process workers, atomic artifact publication | Accepted |
+| [0012](0012-quadratic-elements.md) | Quadratic (P2) elements for the Reference tier; P1 stays the default and the cross-check | Accepted |
+| [0013](0013-adaptive-refinement.md) | Goal-oriented adaptive refinement: flux-jump estimator, dual weighting, Dörfler marking, re-mesh from a sizing field | Accepted |
+| [0014](0014-scalable-linear-solver.md) | PETSc CG + hypre AMG beside the direct solve, optional and refused rather than degraded | Accepted |
+| [0015](0015-reference-job-semantics.md) | Reference jobs freeze a policy, not a mesh; result quality states distinct from the job lifecycle | Accepted |
 
 ## Writing one
 
