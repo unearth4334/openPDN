@@ -421,6 +421,7 @@ export function SimulationPanel() {
                   </button>
                 ))}
               </div>
+              <EstimateSummary estimate={estimate} error={estimateError} pending={draft !== null} />
             </div>
 
             <details className="sim-advanced">
@@ -444,8 +445,6 @@ export function SimulationPanel() {
                 in the result.
               </p>
             </details>
-
-            <EstimateSummary estimate={estimate} error={estimateError} pending={draft !== null} />
 
             {queueError ? <p className="sim-error">{queueError}</p> : null}
             <button
@@ -516,6 +515,16 @@ function EstimateSummary({
           {formatCount(estimate.budget_dofs)} DOFs). Reduce accuracy — it is never lowered silently.
         </p>
       ) : null}
+      {estimate.assumptions.map((assumption) => (
+        <p className="sim-error" key={assumption}>
+          {assumption}
+        </p>
+      ))}
+      {estimate.warnings.map((warning) => (
+        <p className="sim-note" key={warning}>
+          {warning}
+        </p>
+      ))}
       {estimate.duplicate_result_job_id ? (
         <p className="sim-note">
           An identical analysis already completed ({estimate.duplicate_result_job_id}).

@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import threading
 import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from openpdn.application.accuracy import VERIFICATION_REFINEMENT_FACTOR, refine_mesh_spec
 from openpdn.application.simulation_models import (
     JobRecord,
     JobState,
@@ -66,9 +66,6 @@ _logger = logging.getLogger(__name__)
 
 #: Fraction of the lease after which the heartbeat renews it.
 _HEARTBEAT_FRACTION = 1.0 / 3.0
-
-#: Refinement factor for the Verification comparison mesh (see accuracy.py).
-_VERIFICATION_REFINEMENT = 1.4142135623730951
 
 #: Relative change in engineering quantities below which the Verification
 #: comparison reports convergence.
@@ -189,7 +186,7 @@ def _execute(
     if spec.verify_convergence:
         jobs.update_stage(job_id, "verifying_convergence")
         started = time.perf_counter()
-        fine_study = _study_from_spec(spec, board, refine_factor=_VERIFICATION_REFINEMENT)
+        fine_study = _study_from_spec(spec, board, refine_factor=VERIFICATION_REFINEMENT_FACTOR)
         fine_result, fine_fields = solver.solve_with_fields(board, fine_study)
         timings["verification_s"] = time.perf_counter() - started
         convergence = _compare_meshes(spec, result, fields, fine_result, fine_fields)
@@ -230,15 +227,12 @@ def run_inline(
 
 def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float) -> AnalysisStudy:
     """Build the immutable spec's `AnalysisStudy`, optionally refined."""
-    # A genuine refinement must scale the *feature-width* sizing too: most
-    # of a routed net's mesh is width-graded, so shrinking only the max/min
-    # bounds would barely change it and the comparison would prove nothing.
-    refined_across = math.ceil(spec.mesh.elements_across_feature * refine_factor)
+    resolved = refine_mesh_spec(spec.mesh, refine_factor) if refine_factor != 1.0 else spec.mesh
     mesh = MeshSettings(
-        target_element_size=Quantity.configured(spec.mesh.max_element_m / refine_factor, METRE),
-        minimum_element_size=Quantity.configured(spec.mesh.min_element_m / refine_factor, METRE),
-        elements_across_feature=refined_across,
-        growth_rate=spec.mesh.growth_rate,
+        target_element_size=Quantity.configured(resolved.max_element_m, METRE),
+        minimum_element_size=Quantity.configured(resolved.min_element_m, METRE),
+        elements_across_feature=resolved.elements_across_feature,
+        growth_rate=resolved.growth_rate,
     )
     sources = (
         VoltageSource(

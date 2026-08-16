@@ -300,6 +300,7 @@ export interface EstimateResponse {
   connectivity_ok: boolean;
   connectivity_message: string | null;
   warnings: string[];
+  assumptions: string[];
   duplicate_result_job_id: string | null;
 }
 

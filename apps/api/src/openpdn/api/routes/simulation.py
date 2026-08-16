@@ -113,6 +113,7 @@ class EstimateResponse(BaseModel):
     connectivity_ok: bool
     connectivity_message: str | None
     warnings: list[str]
+    assumptions: list[str]
     duplicate_result_job_id: str | None
 
 
@@ -201,6 +202,7 @@ async def estimate_simulation(
         connectivity_ok=plan.connectivity_ok,
         connectivity_message=plan.connectivity_message,
         warnings=list(estimate.warnings),
+        assumptions=list(estimate.assumptions),
         duplicate_result_job_id=previous.spec.job_id if previous else None,
     )
 

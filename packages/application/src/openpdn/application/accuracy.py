@@ -6,13 +6,31 @@ same relative resolution on a 30 mm module and a 300 mm backplane; the
 resolved absolute numbers -- not the profile name -- are frozen into the job
 spec (ADR-0011).
 
-The values below were calibrated on the validation suite (straight-trace
-error at Standard ~0.3 %, High ~0.1 %) and bounded on the real reference
-board; treat changes as solver-behaviour changes, not cosmetics.
+The ladder was re-measured (2026-08-16) end-to-end -- real mesh, real
+assembly, real direct solve -- on a 150x100 mm single-layer plane board (two
+corner terminals, no narrow features) because the previous numbers made even
+Verification solve in well under a second, which is not a meaningful
+confidence check. Measured wall-clock, one net:
+
+    profile        divisions  across  growth   DOFs               time
+    preview        180        8       0.50     17,462             0.23 s
+    standard       300        10      0.50     48,348             0.60 s
+    high           500        14      0.45     133,809             2.05 s
+    verification   800        18      0.40     341,917 base /      24.2 s
+                                                683,956 refined     (~104x preview)
+
+Preview now sits where Verification used to (a deliberate shift -- the old
+Preview/Standard/High were all "instant" on realistic boards); Verification's
+total wall-clock (base solve plus its automatic refined comparison, see
+`VERIFICATION_REFINEMENT_FACTOR`) lands close to 100x Preview's. Both are
+measured, not derived from a formula -- re-measure with a real solve before
+changing these numbers, the same way, rather than reasoning about divisions
+in the abstract; treat changes as solver-behaviour changes, not cosmetics.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Final
 
@@ -30,35 +48,36 @@ class _ProfileShape:
 
 
 _SHAPES: Final[dict[AccuracyProfile, _ProfileShape]] = {
-    # Fast sanity check: coarse elements, 2-3 across narrow features, no
-    # convergence pass. Results are labelled preview / not verified.
+    # Fast sanity check: sits where the old Verification tier did. Results
+    # are labelled preview / not verified.
     AccuracyProfile.PREVIEW: _ProfileShape(
-        diagonal_divisions=60.0,
-        elements_across_feature=2,
-        growth_rate=1.0,
-        verify_convergence=False,
-    ),
-    # Normal engineering work: ~4 elements across significant features.
-    AccuracyProfile.STANDARD: _ProfileShape(
-        diagonal_divisions=100.0,
-        elements_across_feature=4,
-        growth_rate=0.7,
-        verify_convergence=False,
-    ),
-    # High confidence: ~6 across, tighter grading.
-    AccuracyProfile.HIGH: _ProfileShape(
-        diagonal_divisions=140.0,
-        elements_across_feature=6,
-        growth_rate=0.5,
-        verify_convergence=False,
-    ),
-    # Verification: ~8 across plus an automatic refined-mesh comparison whose
-    # deltas are reported as discretisation sensitivity -- evidence, not just
-    # smaller triangles.
-    AccuracyProfile.VERIFICATION: _ProfileShape(
         diagonal_divisions=180.0,
         elements_across_feature=8,
         growth_rate=0.5,
+        verify_convergence=False,
+    ),
+    # Normal engineering work: ~0.6 s on the reference board.
+    AccuracyProfile.STANDARD: _ProfileShape(
+        diagonal_divisions=300.0,
+        elements_across_feature=10,
+        growth_rate=0.5,
+        verify_convergence=False,
+    ),
+    # High confidence: ~2 s on the reference board.
+    AccuracyProfile.HIGH: _ProfileShape(
+        diagonal_divisions=500.0,
+        elements_across_feature=14,
+        growth_rate=0.45,
+        verify_convergence=False,
+    ),
+    # Verification: an automatic refined-mesh comparison whose deltas are
+    # reported as discretisation sensitivity -- evidence, not just smaller
+    # triangles. ~100x Preview's wall-clock across the base plus refined
+    # solve.
+    AccuracyProfile.VERIFICATION: _ProfileShape(
+        diagonal_divisions=800.0,
+        elements_across_feature=18,
+        growth_rate=0.4,
         verify_convergence=True,
     ),
 }
@@ -90,4 +109,21 @@ def resolve_profile(
             growth_rate=shape.growth_rate,
         ),
         shape.verify_convergence,
+    )
+
+
+def refine_mesh_spec(mesh: ResolvedMeshSpec, factor: float) -> ResolvedMeshSpec:
+    """Scale a resolved mesh spec for the Verification comparison solve.
+
+    A genuine refinement must scale the *feature-width* sizing too: most of a
+    routed net's mesh is width-graded, so shrinking only the max/min bounds
+    would barely change it and the comparison would prove nothing. Shared by
+    the queue-time budget check and the worker's actual refined solve so the
+    two can never drift apart.
+    """
+    return ResolvedMeshSpec(
+        max_element_m=mesh.max_element_m / factor,
+        min_element_m=mesh.min_element_m / factor,
+        elements_across_feature=math.ceil(mesh.elements_across_feature * factor),
+        growth_rate=mesh.growth_rate,
     )

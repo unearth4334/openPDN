@@ -61,6 +61,13 @@ never silently lowered. Estimates must come from the mesher's own sizing
 pass (`solver.fem.plan.count_mesh_points`) — an estimate from a disconnected
 heuristic is fiction.
 
+For the Verification profile, `SimulationService.plan` estimates *both* the
+base mesh and its √2-refined comparison mesh (`accuracy.refine_mesh_spec`)
+and gates `over_budget` on the worse of the two. The refined solve happens
+later inside the worker with no budget check of its own, so a queue-time
+check against the base mesh alone would let an oversized comparison pass
+through and only fail expensively, mid-job, on the worker.
+
 ## Numerical conventions carried by jobs
 
 * Resistance jobs drive the normalised 1 A probe current through the

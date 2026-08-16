@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from openpdn.application.accuracy import resolve_profile
+from openpdn.application.accuracy import (
+    VERIFICATION_REFINEMENT_FACTOR,
+    refine_mesh_spec,
+    resolve_profile,
+)
 from openpdn.application.errors import BoardNotFoundError
 from openpdn.application.simulation_models import (
     JobRecord,
@@ -109,6 +113,31 @@ class SimulationService:
         estimate = self._planner.estimate(
             board, record.normalized, draft.net_id, mesh, self._limits.max_dofs
         )
+        if verify:
+            # Verification's automatic comparison solve runs at a finer mesh
+            # than the one just estimated (see accuracy.refine_mesh_spec) and
+            # is not separately budget-checked at solve time -- so the worst
+            # of the two must gate `over_budget` here, or a job that looks
+            # affordable at queue time can still blow the worker's memory
+            # budget on its second, unchecked solve.
+            refined_estimate = self._planner.estimate(
+                board,
+                record.normalized,
+                draft.net_id,
+                refine_mesh_spec(mesh, VERIFICATION_REFINEMENT_FACTOR),
+                self._limits.max_dofs,
+            )
+            if refined_estimate.over_budget:
+                estimate = replace(
+                    estimate,
+                    over_budget=True,
+                    assumptions=(
+                        *estimate.assumptions,
+                        f"Verification's refined comparison mesh needs an estimated "
+                        f"{refined_estimate.dofs:,} DOFs, over the "
+                        f"{refined_estimate.budget_dofs:,}-DOF budget.",
+                    ),
+                )
         issue = self._planner.check_connectivity(
             board,
             record.normalized,

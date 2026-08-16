@@ -27,11 +27,15 @@ BYTES_PER_DOF: Final = 1500
 #: A planar Delaunay triangulation of n points has about 2n triangles.
 TRIANGLES_PER_POINT: Final = 2.0
 
-#: Compute-class thresholds by DOF count for the direct solver.
+#: Compute-class thresholds by DOF count for the direct solver. Calibrated
+#: against the accuracy-profile ladder (accuracy.py): on the reference board,
+#: Preview/Standard/High/Verification land at roughly 17k/48k/134k/342k DOFs,
+#: so each profile gets its own class rather than three of four reading
+#: "very high".
 CLASS_THRESHOLDS: Final = (
-    (50_000, ComputeClass.LOW),
-    (250_000, ComputeClass.MODERATE),
-    (1_000_000, ComputeClass.HIGH),
+    (25_000, ComputeClass.LOW),
+    (120_000, ComputeClass.MODERATE),
+    (300_000, ComputeClass.HIGH),
 )
 
 
