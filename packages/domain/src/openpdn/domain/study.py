@@ -43,6 +43,20 @@ class ViaModel(StrEnum):
     RESOLVED_3D = "resolved_3d"
 
 
+class ElementOrder(StrEnum):
+    """Polynomial order of the finite-element basis (ADR-0012).
+
+    `P1` is the linear triangle every profile below Reference uses. `P2` is
+    the six-node quadratic triangle: more accurate per element and per DOF on
+    smooth solutions, roughly four times the DOFs on the same triangulation.
+    Order is a study input, not a separate solver -- a backend that cannot
+    serve the requested order declares so and is refused before dispatch.
+    """
+
+    P1 = "p1"
+    P2 = "p2"
+
+
 @dataclass(frozen=True, slots=True)
 class AttachmentGroup:
     """Terminals and/or vias forming one equipotential/current group.
@@ -142,6 +156,9 @@ class MeshSettings:
             what controls discretisation error in neck-downs and traces.
         growth_rate: How fast element size may grow per unit distance from a
             refined boundary, dimensionless. Lower is smoother and denser.
+        element_order: Polynomial order of the basis. Independent of element
+            *size*: raising the order refines the approximation without
+            changing the triangulation.
     """
 
     target_element_size: Quantity
@@ -149,6 +166,7 @@ class MeshSettings:
     refine_around_terminals: bool = True
     elements_across_feature: int = 4
     growth_rate: float = 0.7
+    element_order: ElementOrder = ElementOrder.P1
 
     def __post_init__(self) -> None:
         """Validate element sizing."""

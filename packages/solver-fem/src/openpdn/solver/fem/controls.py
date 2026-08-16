@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from openpdn.domain.study import ElementOrder
 from openpdn.domain.units import METRE
 
 if TYPE_CHECKING:
@@ -74,6 +75,9 @@ class MeshControls:
         elements_across_feature: Elements across a narrow conductor's width.
         growth_rate: Element growth per unit distance from refined boundary.
         refine_terminals: Whether terminal pads force local refinement.
+        element_order: Basis order. It does not affect the triangulation at
+            all -- the mesher produces the same triangles either way, and the
+            order decides how many nodes each of them carries (ADR-0012).
     """
 
     max_size_m: float
@@ -81,6 +85,7 @@ class MeshControls:
     elements_across_feature: int
     growth_rate: float
     refine_terminals: bool
+    element_order: ElementOrder = ElementOrder.P1
 
     @classmethod
     def from_settings(cls, settings: MeshSettings) -> MeshControls:
@@ -96,4 +101,5 @@ class MeshControls:
             elements_across_feature=settings.elements_across_feature,
             growth_rate=settings.growth_rate,
             refine_terminals=settings.refine_around_terminals,
+            element_order=settings.element_order,
         )

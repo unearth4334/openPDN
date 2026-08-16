@@ -307,7 +307,11 @@ def _solve_prepared(
     field_data = FemFieldData(
         points=problem.points,
         triangles=problem.triangles,
-        node_voltage_v=solution.voltage_v[problem.dof_of_node],
+        # Field data is published against `points`, the vertex block, so the
+        # nodal voltages must be the vertex prefix of `dof_of_node` -- at P2
+        # that array also carries edge midpoints, which have no entry in
+        # `points` and would misalign every downstream overlay.
+        node_voltage_v=solution.voltage_v[problem.dof_of_node[: len(problem.points)]],
         tri_j_vol_a_per_m2=fields.j_vol_a_per_m2,
         tri_power_w=fields.power_w,
         tri_region_index=problem.tri_region_index,
@@ -426,7 +430,10 @@ def _net_results(
             tri_mask[problem.tri_region_index == index] = True
         if not node_mask.any():
             continue
-        v = solution.voltage_v[problem.dof_of_node[node_mask]]
+        # `node_mask` is built from region vertex ranges, so it indexes the
+        # vertex prefix of `dof_of_node`; at P2 the rest of that array is
+        # edge midpoints, which belong to no region range.
+        v = solution.voltage_v[problem.dof_of_node[: problem.node_count][node_mask]]
         v = v[~np.isnan(v)]
         if len(v) == 0:
             continue

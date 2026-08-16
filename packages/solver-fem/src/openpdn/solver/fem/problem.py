@@ -34,9 +34,16 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from openpdn.domain.board import Layer, Pad, Via
 from openpdn.domain.materials import COPPER_ANNEALED
 from openpdn.domain.results import Diagnostic, DiagnosticSeverity
+from openpdn.domain.study import ElementOrder
 from openpdn.domain.units import KELVIN, METRE
 from openpdn.solver.api import SolverConfigurationError
 from openpdn.solver.fem.controls import MeshControls
+from openpdn.solver.fem.elements import (
+    build_edges,
+    element_stiffness,
+    nodes_per_element,
+    p2_nodes,
+)
 from openpdn.solver.fem.errors import MeshGenerationError
 from openpdn.solver.fem.mesh import RegionMesh, mesh_polygon
 
@@ -60,6 +67,22 @@ class RegionRef:
     node_count: int
     tri_start: int
     tri_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RegionMidpoints:
+    """P2 edge-midpoint node indices and coordinates, grouped by region.
+
+    Midpoints are appended after the whole vertex block, so unlike vertices
+    they fall in no region's `node_start`/`node_count` range. Grouping them
+    here is what lets the pad-containment pass filter by layer and net
+    exactly as it does for vertices. An edge never spans two regions -- each
+    region owns a disjoint vertex range -- so an edge's region is simply the
+    region of either endpoint.
+    """
+
+    indices_by_region: dict[int, npt.NDArray[np.int64]]
+    coords_by_region: dict[int, npt.NDArray[np.float64]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +122,15 @@ class SheetProblem:
 
     points: npt.NDArray[np.float64]
     triangles: npt.NDArray[np.int32]
+    #: Full node set and element connectivity for the active element order.
+    #: At P1 these are `points`/`triangles`; at P2 `nodes` is the vertex block
+    #: followed by edge midpoints and `tri_nodes` is `(m, 6)` (ADR-0012 §3).
+    #: `points`/`triangles` always keep their P1 meaning, so every
+    #: vertex-indexed consumer -- region ranges, overlays, mesh export --
+    #: reads the same thing at either order.
+    nodes: npt.NDArray[np.float64]
+    tri_nodes: npt.NDArray[np.int32]
+    element_order: ElementOrder
     tri_sheet_conductance: npt.NDArray[np.float64]
     tri_thickness_m: npt.NDArray[np.float64]
     tri_region_index: npt.NDArray[np.int32]
@@ -238,9 +270,31 @@ def build_problem(
     tri_sheet_conductance = sheet_conductance[tri_region_index]
     tri_thickness_m = thickness_by_region[tri_region_index]
 
-    union = _UnionFind(len(points))
+    order = controls.element_order
+    if order is ElementOrder.P2:
+        nodes, tri_nodes = p2_nodes(points, triangles)
+    else:
+        nodes, tri_nodes = points, triangles
+
+    # Union-find spans every node, but the binding passes below only ever
+    # touch vertex indices -- which is exactly why ADR-0012 appends midpoints
+    # after the vertex block instead of interleaving them.
+    union = _UnionFind(len(nodes))
+    midpoints = (
+        _group_midpoints_by_region(points, triangles, nodes, region_refs)
+        if order is ElementOrder.P2
+        else None
+    )
     terminal_nodes = _bind_terminal_nodes(
-        board, study, region_refs, region_meshes, shapely_regions, pads_by_id, union, diagnostics
+        board,
+        study,
+        region_refs,
+        region_meshes,
+        shapely_regions,
+        pads_by_id,
+        union,
+        diagnostics,
+        midpoints,
     )
     via_contacts = _bind_via_contacts(
         board, study, normalized, region_refs, region_meshes, via_params, union
@@ -251,6 +305,8 @@ def build_problem(
     source_seeds, load_seeds = _bind_attachment_groups(
         study, terminal_nodes, via_contacts, via_id_to_consolidated, union
     )
+    if order is ElementOrder.P2:
+        _collapse_midpoints_of_equipotential_edges(union, triangles, len(points))
     dof_of_node, n_dofs = _compress_dofs(union)
 
     source_dofs = {source_id: int(dof_of_node[seed]) for source_id, seed in source_seeds.items()}
@@ -258,7 +314,9 @@ def build_problem(
 
     via_segments = _via_segments(board, study, via_contacts, via_params, dof_of_node, diagnostics)
 
-    matrix = _assemble(points, triangles, tri_sheet_conductance, dof_of_node, n_dofs, via_segments)
+    matrix = _assemble(
+        nodes, tri_nodes, tri_sheet_conductance, dof_of_node, n_dofs, via_segments, order
+    )
 
     component_of_dof = _components(matrix, n_dofs, via_segments)
 
@@ -275,6 +333,9 @@ def build_problem(
     return SheetProblem(
         points=points,
         triangles=triangles,
+        nodes=nodes,
+        tri_nodes=tri_nodes,
+        element_order=order,
         tri_sheet_conductance=tri_sheet_conductance,
         tri_thickness_m=tri_thickness_m,
         tri_region_index=tri_region_index,
@@ -485,6 +546,7 @@ def _bind_terminal_nodes(
     pads_by_id: dict[PadId, Pad],
     union: _UnionFind,
     diagnostics: list[Diagnostic],
+    midpoints: _RegionMidpoints | None = None,
 ) -> dict[TerminalId, tuple[list[int], bool]]:
     """Collapse each study terminal's pad copper into one equipotential DOF.
 
@@ -513,7 +575,9 @@ def _bind_terminal_nodes(
             pad = pads_by_id.get(pad_id)
             if pad is None:
                 continue
-            pad_nodes = _nodes_in_pad(pad, terminal.net_id, region_refs, region_meshes)
+            pad_nodes = _nodes_in_pad(
+                pad, terminal.net_id, region_refs, region_meshes, midpoints
+            )
             if not pad_nodes:
                 pad_nodes = _nearest_node_to(
                     pad.position.x_m,
@@ -554,19 +618,35 @@ def _nodes_in_pad(
     net_id: NetId,
     region_refs: list[RegionRef],
     region_meshes: list[RegionMesh],
+    midpoints: _RegionMidpoints | None = None,
 ) -> list[int]:
-    """Global node indices inside a pad's outline on its layer and net."""
+    """Global node indices inside a pad's outline on its layer and net.
+
+    At P2 the edge midpoints are tested by the same containment rule as the
+    vertices (ADR-0012 §4). Skipping them is not a harmless simplification:
+    an edge that straddles the pad boundary would keep a free midpoint
+    *inside* the pad, so the equipotential region would stop short of the
+    real copper contact and the conduction path would come out too long.
+    Measured on the straight-trace validation board, omitting this made P2
+    less accurate than P1 -- the error is geometric, not a basis defect.
+    """
     if pad.outline is None:
         return []
     outline = _to_shapely(pad.outline)
     # A hair of tolerance keeps vertices lying exactly on the pad edge.
     outline = outline.buffer(1e-9)
     found: list[int] = []
-    for ref, mesh in zip(region_refs, region_meshes, strict=True):
+    for index, (ref, mesh) in enumerate(zip(region_refs, region_meshes, strict=True)):
         if ref.layer_id != pad.layer_id or ref.net_id != net_id:
             continue
         inside = shapely.contains_xy(outline, mesh.points[:, 0], mesh.points[:, 1])
         found.extend((np.nonzero(inside)[0] + ref.node_start).tolist())
+        if midpoints is not None:
+            coords = midpoints.coords_by_region.get(index)
+            indices = midpoints.indices_by_region.get(index)
+            if coords is not None and indices is not None and len(indices):
+                hit = shapely.contains_xy(outline, coords[:, 0], coords[:, 1])
+                found.extend(indices[hit].tolist())
     return found
 
 
@@ -636,6 +716,53 @@ def _bind_attachment_groups(
     }
     load_seeds: dict[LoadId, int] = {load.id: _seed(load.attachment) for load in study.loads}
     return source_seeds, load_seeds
+
+
+def _group_midpoints_by_region(
+    points: npt.NDArray[np.float64],
+    triangles: npt.NDArray[np.int32],
+    nodes: npt.NDArray[np.float64],
+    region_refs: list[RegionRef],
+) -> _RegionMidpoints:
+    """Bucket P2 midpoint nodes by the region their edge belongs to."""
+    edges, _ = build_edges(triangles)
+    region_of_vertex = np.zeros(len(points), dtype=np.int64)
+    for index, ref in enumerate(region_refs):
+        region_of_vertex[ref.node_start : ref.node_start + ref.node_count] = index
+
+    global_index = np.arange(len(edges), dtype=np.int64) + len(points)
+    owner = region_of_vertex[edges[:, 0]]
+    indices: dict[int, npt.NDArray[np.int64]] = {}
+    coords: dict[int, npt.NDArray[np.float64]] = {}
+    for index in range(len(region_refs)):
+        selected = global_index[owner == index]
+        indices[index] = selected
+        coords[index] = nodes[selected]
+    return _RegionMidpoints(indices_by_region=indices, coords_by_region=coords)
+
+
+def _collapse_midpoints_of_equipotential_edges(
+    union: _UnionFind,
+    triangles: npt.NDArray[np.int32],
+    vertex_count: int,
+) -> None:
+    """Pin the midpoint of any edge whose two vertices are already equipotential.
+
+    Without this, a quadratic edge with both ends pinned to a terminal or via
+    contact potential can still bow away from it in the middle: the region
+    would be equipotential only *at its nodes*, not across its copper. That
+    quietly reintroduces the mesh-dependent spreading resistance that
+    ADR-0010 introduced contact regions to eliminate, and it would show up as
+    a resistance that drifts with mesh density rather than converging.
+
+    Testing "both endpoints already share a group" needs no pad geometry: the
+    binding passes have already collapsed each contact region, so sharing a
+    root *is* the statement that this edge lies inside one (ADR-0012 §4).
+    """
+    edges, _ = build_edges(triangles)
+    for index, (first, second) in enumerate(edges):
+        if union.find(int(first)) == union.find(int(second)):
+            union.union(int(first), vertex_count + index)
 
 
 def _compress_dofs(union: _UnionFind) -> tuple[npt.NDArray[np.int64], int]:
@@ -878,39 +1005,28 @@ def _barrel_geometry(via: Via | None, study: AnalysisStudy) -> tuple[float, floa
 
 
 def _assemble(
-    points: npt.NDArray[np.float64],
-    triangles: npt.NDArray[np.int32],
+    nodes: npt.NDArray[np.float64],
+    tri_nodes: npt.NDArray[np.int32],
     tri_sheet_conductance: npt.NDArray[np.float64],
     dof_of_node: npt.NDArray[np.int64],
     n_dofs: int,
     via_segments: tuple[ViaSegment, ...],
+    order: ElementOrder,
 ) -> sp.csr_matrix:
     """Assemble the global conductance matrix, in double precision.
 
-    Per linear (P1) triangle with vertices `p1 p2 p3`, area `A` and sheet
-    conductance `Gs = sigma * t`:
-
-        K_e = Gs / (4A) * (b b^T + c c^T)
-
-    with `b_i = y_j - y_k`, `c_i = x_k - x_j` (cyclic). This is the standard
-    stiffness of `div(Gs grad V) = 0`; via segments add `G` on the diagonal
-    and `-G` off-diagonal for their DOF pair.
+    The element stiffness of `div(Gs grad V) = 0` comes from `elements.py`,
+    which owns both orders; via segments add `G` on the diagonal and `-G`
+    off-diagonal for their DOF pair. The scatter below is order-agnostic --
+    it works off however many nodes an element carries.
     """
-    p = points[triangles]  # (m, 3, 2)
-    x = p[:, :, 0]
-    y = p[:, :, 1]
-    b = np.stack([y[:, 1] - y[:, 2], y[:, 2] - y[:, 0], y[:, 0] - y[:, 1]], axis=1)
-    c = np.stack([x[:, 2] - x[:, 1], x[:, 0] - x[:, 2], x[:, 1] - x[:, 0]], axis=1)
-    area2 = x[:, 0] * b[:, 0] + x[:, 1] * b[:, 1] + x[:, 2] * b[:, 2]
-    area = np.abs(area2) / 2.0
-    scale = tri_sheet_conductance / (4.0 * np.maximum(area, 1e-300))
+    local = element_stiffness(nodes, tri_nodes, tri_sheet_conductance, order)
 
-    local = (b[:, :, None] * b[:, None, :] + c[:, :, None] * c[:, None, :]) * scale[:, None, None]
-
-    dofs = dof_of_node[triangles]  # (m, 3)
-    rows = np.repeat(dofs, 3, axis=1).ravel()
-    cols = np.tile(dofs, (1, 3)).ravel()
-    data = local.reshape(len(triangles), 9).ravel()
+    k = nodes_per_element(order)
+    dofs = dof_of_node[tri_nodes]  # (m, k)
+    rows = np.repeat(dofs, k, axis=1).ravel()
+    cols = np.tile(dofs, (1, k)).ravel()
+    data = local.reshape(len(tri_nodes), k * k).ravel()
 
     via_rows: list[int] = []
     via_cols: list[int] = []

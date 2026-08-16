@@ -102,3 +102,35 @@ P2, and neither is automatic.
   which are singular or non-smooth and will depress the observed rate locally.
   P2 buys less at a reentrant corner than it does in open copper, which is
   part of the argument for adaptivity (ADR-0013) rather than uniform P2.
+
+## Measured (implementation, 2026-08-16)
+
+The above was written before implementation. What the validation suite
+actually measured, and it sharpens the last point considerably:
+
+* **Basis correctness**, on a square with harmonic exact solutions: observed
+  convergence order P1 `1.88`, P2 `3.89`–`3.91` in the nodal norm, and P2
+  reproduces a harmonic quadratic to `1.3e-16` where P1 gives `9.1e-4`.
+* **A uniform grid is not a neutral test bed.** On it the P1 stiffness
+  coincides with the five-point finite-difference Laplacian, whose truncation
+  error involves only fourth derivatives, so P1 is *nodally exact* for
+  harmonic quadratics too and the P1/P2 distinction vanishes for reasons that
+  have nothing to do with the basis. The element tests jitter the mesh
+  because of this.
+* **The per-DOF gain is problem-dependent, and the spread is large**: at
+  matched DOF counts, P2 is about `100x` more accurate than P1 on the smooth
+  square, but only about `1.6x` on the straight-trace board (`6072` vs `6071`
+  DOFs, relative error `6.8e-4` vs `4.3e-4`).
+
+  The gap is the finding. On that board the dominant error is the
+  discretisation of the equipotential *terminal boundary*, which improves
+  with smaller elements near the pads and not with polynomial order -- P1 and
+  P2 converge at the same depressed rate there. This is measured evidence for
+  ADR-0013's adaptive refinement over simply raising the order everywhere,
+  and it is why P1 is retained rather than superseded.
+* **§4's containment clause is load-bearing, not belt-and-braces.** It was
+  deferred during a first implementation pass, and P2 came out *worse* than
+  P1 (`9.0e-3` against `6.8e-3` at `h = 0.5 mm`): with pad-straddling
+  midpoints left free, the equipotential region stopped short of the real
+  copper contact and lengthened the conduction path. Implementing the clause
+  moved P2 to `1.4e-3`. Both clauses are required.

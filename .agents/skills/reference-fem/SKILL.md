@@ -45,6 +45,13 @@ extension of that pipeline, not a parallel one.
   built contact regions to avoid.
 * P1 is never removed. It is the default for other profiles, the
   cross-validation baseline, and the debugging path.
+* **Do not assume P2 is simply "better".** Measured at matched DOF counts:
+  ~100x more accurate than P1 on a smooth square, but only ~1.6x on the
+  straight-trace board, where the error is set by the terminal-boundary
+  discretisation rather than by interior approximation. Raising the order
+  does not fix a geometry-limited error -- refining near the feature does.
+  That measurement is the case for adaptivity, and it is why "switch
+  Reference to P2 and stop" is not the milestone.
 * P2 makes `J` linear per element. Percentile statistics must sample the real
   quadratic gradient, not one value per triangle.
 

@@ -20,6 +20,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from openpdn.domain.study import ElementOrder
+from openpdn.solver.fem.elements import (
+    barycentric_gradients,
+    quadrature_rule,
+    shape_gradients,
+)
+
 if TYPE_CHECKING:
     import numpy.typing as npt
 
@@ -70,28 +77,46 @@ class ConservationReport:
 def element_fields(problem: SheetProblem, solution: Solution) -> ElementFields:
     """Derive per-element fields from nodal potentials.
 
-    On a linear triangle the potential gradient is constant:
-    `grad V = (1 / 2A) * sum_i V_i * (b_i, c_i)`.
+    On a linear (P1) triangle the potential gradient is constant, so one
+    vector per element is the whole story. On a quadratic (P2) triangle the
+    gradient varies linearly, and two things follow:
+
+    * the reported per-element vector is taken at the **centroid**, which for
+      a linearly varying gradient is exactly its element average -- not an
+      arbitrary sample point;
+    * the dissipated power is **integrated** with the same degree-2
+      quadrature the stiffness uses, because `|grad V|^2` is quadratic and
+      `|grad V(centroid)|^2 * A` would understate it. Power is what the
+      conservation check compares against terminal power (ADR-0010 §6), so
+      an approximation here would surface as a false energy imbalance.
     """
-    tri = problem.triangles
-    p = problem.points[tri]
-    x, y = p[:, :, 0], p[:, :, 1]
-    b = np.stack([y[:, 1] - y[:, 2], y[:, 2] - y[:, 0], y[:, 0] - y[:, 1]], axis=1)
-    c = np.stack([x[:, 2] - x[:, 1], x[:, 0] - x[:, 2], x[:, 1] - x[:, 0]], axis=1)
-    area2 = x[:, 0] * b[:, 0] + x[:, 1] * b[:, 1] + x[:, 2] * b[:, 2]
+    tri_nodes = problem.tri_nodes
+    grad_l, area2 = barycentric_gradients(problem.nodes, tri_nodes)
     area = np.abs(area2) / 2.0
 
-    v = solution.voltage_v[problem.dof_of_node[tri]]
+    v = solution.voltage_v[problem.dof_of_node[tri_nodes]]
     v = np.nan_to_num(v, nan=0.0)
-    inv = 1.0 / np.maximum(area2, 1e-300)
-    grad_x = (v * b).sum(axis=1) * inv
-    grad_y = (v * c).sum(axis=1) * inv
+
+    centroid = np.full(3, 1.0 / 3.0)
+    grad_centroid = np.einsum(
+        "mn,mna->ma", v, shape_gradients(grad_l, centroid, problem.element_order)
+    )
+    grad_x = grad_centroid[:, 0]
+    grad_y = grad_centroid[:, 1]
+
+    if problem.element_order is ElementOrder.P1:
+        power = problem.tri_sheet_conductance * (grad_x**2 + grad_y**2) * area
+    else:
+        power = np.zeros(len(tri_nodes), dtype=np.float64)
+        for weight, lam in quadrature_rule():
+            grad = np.einsum("mn,mna->ma", v, shape_gradients(grad_l, lam, problem.element_order))
+            power += weight * (grad**2).sum(axis=1)
+        power *= problem.tri_sheet_conductance * area
 
     e_field = -np.stack([grad_x, grad_y], axis=1)
     grad_mag = np.hypot(grad_x, grad_y)
     j_sheet = problem.tri_sheet_conductance * grad_mag
     j_vol = j_sheet / np.maximum(problem.tri_thickness_m, 1e-300)
-    power = problem.tri_sheet_conductance * grad_mag**2 * area
 
     return ElementFields(
         e_field_v_per_m=e_field,
