@@ -10,17 +10,25 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from openpdn.domain.study import ElementOrder
 from openpdn.solver.fem.controls import RefinementField
 from openpdn.solver.fem.estimate import dorfler_mark, element_gradients, flux_jump_indicators
 
 
 class _FakeProblem:
-    """The three attributes the estimator reads. Nothing else is needed."""
+    """Only the attributes the estimator reads. Nothing else is needed.
+
+    At P1 the node set is the vertex set, so `nodes`/`tri_nodes` alias
+    `points`/`triangles` exactly as `build_problem` arranges them.
+    """
 
     def __init__(self, points, triangles, sheet_conductance) -> None:
         self.points = np.asarray(points, dtype=np.float64)
         self.triangles = np.asarray(triangles, dtype=np.int32)
         self.tri_sheet_conductance = np.asarray(sheet_conductance, dtype=np.float64)
+        self.nodes = self.points
+        self.tri_nodes = self.triangles
+        self.element_order = ElementOrder.P1
 
 
 def _unit_square_pair() -> _FakeProblem:

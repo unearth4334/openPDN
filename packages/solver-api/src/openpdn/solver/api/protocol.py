@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from openpdn.domain.study import ElementOrder
+
 if TYPE_CHECKING:
     from openpdn.domain.board import Board
     from openpdn.domain.results import ElectricalAnalysisResult, ResultFidelity
@@ -21,6 +23,10 @@ class SolverCapabilities:
 
     fidelity: ResultFidelity
     via_models: frozenset[ViaModel]
+    #: Basis orders this backend can serve. Defaults to linear only, so a
+    #: backend that predates quadratic support keeps declaring the truth
+    #: without being edited (ADR-0012 §5).
+    element_orders: frozenset[ElementOrder] = frozenset({ElementOrder.P1})
     supports_resistance_probes: bool = False
     supports_current_density: bool = False
     supports_power_loss: bool = False

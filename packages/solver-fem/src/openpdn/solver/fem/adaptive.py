@@ -17,8 +17,9 @@ is currently driven by the energy-style indicator alone.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+import math
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
@@ -30,7 +31,7 @@ from openpdn.solver.fem.estimate import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     import numpy.typing as npt
 
@@ -45,8 +46,60 @@ class AdaptiveStatus:
     """Why the loop stopped. Mirrors the result states of ADR-0015."""
 
     CONVERGED = "converged"
+    CONVERGED_WITH_MODEL_LIMITATIONS = "converged_with_model_limitations"
     RESOURCE_LIMITED = "resource_limited"
     NOT_CONVERGED = "not_converged"
+
+
+#: Quantities tracked across generations. `singular` marks those with no
+#: finite continuum limit at a reentrant corner or an ideal terminal edge:
+#: they are reported, never converged on, and their failure to settle must
+#: not condemn the run (ADR-0013 §5, ADR-0015 §5).
+TRACKED_QUANTITIES: Final = (
+    ("resistance_ohm", False),
+    ("total_loss_w", False),
+    ("j99_a_per_m2", False),
+    ("peak_j_a_per_m2", True),
+)
+
+
+def _quantities_of(
+    result: ElectricalAnalysisResult,
+    qoi: float,
+    problem: SheetProblem,
+    current_density: npt.NDArray[np.float64],
+) -> dict[str, float]:
+    """Every tracked quantity for one generation.
+
+    `j99` is weighted by element *area*, not element count: a burst of tiny
+    refined elements at a singularity would otherwise take over the
+    percentile, which would make the robust statistic behave like the raw
+    peak it exists to replace.
+    """
+    loss = sum(net.resistive_loss_w or 0.0 for net in result.nets)
+    peak = max((net.max_current_density_a_per_m2 or 0.0 for net in result.nets), default=0.0)
+
+    corners = problem.points[problem.triangles]
+    area = (
+        np.abs(
+            (corners[:, 1, 0] - corners[:, 0, 0]) * (corners[:, 2, 1] - corners[:, 0, 1])
+            - (corners[:, 2, 0] - corners[:, 0, 0]) * (corners[:, 1, 1] - corners[:, 0, 1])
+        )
+        / 2.0
+    )
+    j99 = 0.0
+    if len(current_density):
+        order = np.argsort(current_density)
+        cumulative = np.cumsum(area[order])
+        index = int(np.searchsorted(cumulative, 0.99 * cumulative[-1]))
+        j99 = float(current_density[order][min(index, len(order) - 1)])
+
+    return {
+        "resistance_ohm": qoi,
+        "total_loss_w": float(loss),
+        "j99_a_per_m2": j99,
+        "peak_j_a_per_m2": float(peak),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +157,26 @@ class Generation:
     current_imbalance_fraction: float
     power_mismatch_fraction: float
     marked_elements: int
+    quantities: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class QuantityConvergence:
+    """Per-quantity convergence evidence (ADR-0015 §5).
+
+    Resistance and energy may settle while the sampled peak current density
+    does not -- at a reentrant corner the continuum peak is unbounded, so it
+    rises with every refinement forever. Reporting one status for the whole
+    run would either hide that or condemn a perfectly good solve.
+    """
+
+    name: str
+    values: tuple[float, ...]
+    rel_change: float | None
+    converged: bool
+    singular: bool
+    extrapolated: float | None = None
+    observed_order: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,11 +186,27 @@ class AdaptiveOutcome:
     result: ElectricalAnalysisResult
     generations: tuple[Generation, ...]
     status: str
+    quantities: tuple[QuantityConvergence, ...] = ()
 
     @property
     def converged(self) -> bool:
-        """True only when every stopping criterion was met."""
-        return self.status == AdaptiveStatus.CONVERGED
+        """True when the engineering quantities settled.
+
+        `CONVERGED_WITH_MODEL_LIMITATIONS` counts: the answer the user reads
+        did converge, and what did not is a quantity with no continuum limit.
+        The distinction is preserved in `status` rather than collapsed here.
+        """
+        return self.status in {
+            AdaptiveStatus.CONVERGED,
+            AdaptiveStatus.CONVERGED_WITH_MODEL_LIMITATIONS,
+        }
+
+    def quantity(self, name: str) -> QuantityConvergence:
+        """Convergence evidence for one tracked quantity."""
+        for candidate in self.quantities:
+            if candidate.name == name:
+                return candidate
+        raise KeyError(name)
 
     @property
     def final(self) -> Generation:
@@ -202,10 +291,10 @@ def solve_adaptive(
     status = AdaptiveStatus.NOT_CONVERGED
 
     for index in range(policy.max_passes):
-        result, field_data, problem = solve_with_controls(
+        result, field_data, problem, node_values = solve_with_controls(
             board, study, normalized, refinement=field
         )
-        indicators = flux_jump_indicators(problem, field_data.node_voltage_v)
+        indicators = flux_jump_indicators(problem, node_values)
         qoi = quantity_of_interest(result)
         change = (
             None
@@ -246,6 +335,9 @@ def solve_adaptive(
                 current_imbalance_fraction=conservation.imbalance_fraction,
                 power_mismatch_fraction=conservation.power_mismatch_fraction,
                 marked_elements=len(marked),
+                quantities=_quantities_of(
+                    result, qoi, problem, field_data.tri_j_vol_a_per_m2
+                ),
             )
         )
         previous_qoi = qoi
@@ -260,7 +352,100 @@ def solve_adaptive(
 
     if result is None:  # pragma: no cover - max_passes >= 1 is validated
         raise RuntimeError("Adaptive loop produced no solve")
-    return AdaptiveOutcome(result=result, generations=tuple(generations), status=status)
+
+    quantities = _quantity_convergence(generations, policy.target_qoi_rel_change)
+    if status == AdaptiveStatus.CONVERGED and any(
+        quantity.singular and not _is_settled(quantity, policy.target_qoi_rel_change)
+        for quantity in quantities
+    ):
+        # The engineering answers converged but a singular quantity did not,
+        # which is expected rather than a failure: at a reentrant corner the
+        # sampled peak has no finite limit to converge to. Say so explicitly
+        # instead of showing a clean tick (ADR-0015 §5).
+        status = AdaptiveStatus.CONVERGED_WITH_MODEL_LIMITATIONS
+    return AdaptiveOutcome(
+        result=result,
+        generations=tuple(generations),
+        status=status,
+        quantities=quantities,
+    )
+
+
+def _is_settled(quantity: QuantityConvergence, target: float) -> bool:
+    """Whether a quantity's last step was within target, singular or not."""
+    return quantity.rel_change is not None and quantity.rel_change <= target
+
+
+def richardson_extrapolate(
+    values: Sequence[float],
+    dof_counts: Sequence[int],
+) -> tuple[float | None, float | None]:
+    """Extrapolated limit and observed order, or `(None, None)`.
+
+    Returns nothing at all unless the sequence earns it. ADR-0015 §6 makes
+    this conditional deliberately: meshes here are non-nested, so a QoI
+    sequence oscillates by a few parts per thousand on re-meshing alone, and
+    fitting a limit to an oscillating sequence produces a confident-looking
+    number that means nothing. The checks below are the price of publishing
+    an extrapolated value.
+
+    Assumes `f_i = f_inf + C h^p` with `h ~ dofs^(-1/2)` in two dimensions.
+    """
+    if len(values) < 3 or len(values) != len(dof_counts):
+        return None, None
+    third, second, first = values[-3], values[-2], values[-1]
+    delta_early = second - third
+    delta_late = first - second
+    if delta_early == 0.0 or delta_late == 0.0:
+        return None, None
+    # Monotone in one direction, with the steps genuinely shrinking: that is
+    # what "asymptotic regime" means operationally. Oscillation fails here.
+    if delta_early * delta_late <= 0.0:
+        return None, None
+    if abs(delta_late) >= abs(delta_early):
+        return None, None
+    if dof_counts[-1] <= dof_counts[-2]:
+        return None, None
+
+    ratio = math.sqrt(dof_counts[-1] / dof_counts[-2])
+    if ratio <= 1.0:
+        return None, None
+    order = math.log(abs(delta_early / delta_late)) / math.log(ratio)
+    # A rate outside this band is not a discretisation trend; it is noise
+    # that happened to look monotone over three samples.
+    if not 0.5 <= order <= 6.0:
+        return None, None
+    limit = first + delta_late / (ratio**order - 1.0)
+    return limit, order
+
+
+def _quantity_convergence(
+    generations: Sequence[Generation],
+    target: float,
+) -> tuple[QuantityConvergence, ...]:
+    """Per-quantity status across the run."""
+    out: list[QuantityConvergence] = []
+    dof_counts = [generation.dof_count for generation in generations]
+    for name, singular in TRACKED_QUANTITIES:
+        values = [g.quantities.get(name, 0.0) for g in generations]
+        change: float | None = None
+        if len(values) >= 2 and values[-2] != 0.0:
+            change = abs(values[-1] - values[-2]) / abs(values[-2])
+        limit, order = richardson_extrapolate(values, dof_counts)
+        out.append(
+            QuantityConvergence(
+                name=name,
+                values=tuple(values),
+                rel_change=change,
+                # A singular quantity is never called converged, however
+                # quiet it looks: its continuum limit does not exist.
+                converged=(not singular) and change is not None and change <= target,
+                singular=singular,
+                extrapolated=None if singular else limit,
+                observed_order=None if singular else order,
+            )
+        )
+    return tuple(out)
 
 
 def format_history(outcome: AdaptiveOutcome) -> str:

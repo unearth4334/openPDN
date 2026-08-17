@@ -31,7 +31,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from openpdn.solver.fem.elements import barycentric_gradients, build_edges
+from openpdn.solver.fem.elements import (
+    barycentric_gradients,
+    build_edges,
+    shape_gradients,
+)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -41,23 +45,27 @@ if TYPE_CHECKING:
 
 def element_gradients(
     problem: SheetProblem,
-    node_voltage_v: npt.NDArray[np.float64],
+    node_values: npt.NDArray[np.float64],
+    barycentric: npt.NDArray[np.float64] | None = None,
 ) -> npt.NDArray[np.float64]:
-    """Potential gradient per element from vertex potentials, `(m, 2)`.
+    """Potential gradient per element at one point, `(m, 2)`.
 
-    P1 only: the gradient is constant per element, which is what makes the
-    jump across an edge a single well-defined number.
+    At P1 the gradient is constant, so `barycentric` is irrelevant. At P2 it
+    varies linearly across the element and the evaluation point matters --
+    which is why the flux jump has to be integrated along an edge rather than
+    sampled once.
     """
-    triangles = problem.triangles
-    grad_l, _ = barycentric_gradients(problem.points, triangles)
-    values = np.nan_to_num(node_voltage_v[triangles], nan=0.0)
-    gradients: npt.NDArray[np.float64] = np.einsum("mn,mna->ma", values, grad_l)
+    grad_l, _ = barycentric_gradients(problem.nodes, problem.tri_nodes)
+    where = np.full(3, 1.0 / 3.0) if barycentric is None else np.asarray(barycentric)
+    shapes = shape_gradients(grad_l, where, problem.element_order)
+    values = np.nan_to_num(node_values[problem.tri_nodes], nan=0.0)
+    gradients: npt.NDArray[np.float64] = np.einsum("mn,mna->ma", values, shapes)
     return gradients
 
 
 def flux_jump_indicators(
     problem: SheetProblem,
-    node_voltage_v: npt.NDArray[np.float64],
+    node_values: npt.NDArray[np.float64],
 ) -> npt.NDArray[np.float64]:
     """Per-element error indicator `eta_K`, `(m,)`, in amperes.
 
@@ -67,13 +75,18 @@ def flux_jump_indicators(
     `(Gs_K grad_K - Gs_K' grad_K') . n`; for a boundary edge the single
     contribution is the leaked normal current, which should be zero. One
     accumulation handles both cases without special-casing.
+
+    The jump is evaluated at **both endpoints** of each edge and integrated
+    exactly along it. At P1 the two values coincide and this reduces to the
+    familiar `|e|^2 J^2`; at P2 the flux varies linearly along the edge, and
+    sampling it once would misreport the error by an amount that grows with
+    the very gradients adaptivity is chasing.
     """
     triangles = problem.triangles
     if len(triangles) == 0:
         return np.zeros(0, dtype=np.float64)
 
     edges, tri_edges = build_edges(triangles)
-    gradients = element_gradients(problem, node_voltage_v)
     corners = problem.points[triangles]
 
     # Orientation-independent outward normals: for a counter-clockwise
@@ -85,25 +98,58 @@ def flux_jump_indicators(
     )
     winding = np.where(signed_area2 >= 0.0, 1.0, -1.0)
 
-    jump_per_edge = np.zeros(len(edges), dtype=np.float64)
+    # Jump at each edge's two *global* endpoints, kept in the edge's own
+    # vertex order so contributions from the two adjacent triangles line up.
+    jump_at = np.zeros((len(edges), 2), dtype=np.float64)
     edge_length = np.zeros(len(edges), dtype=np.float64)
     for k in range(3):
+        following = (k + 1) % 3
         start = corners[:, k, :]
-        end = corners[:, (k + 1) % 3, :]
+        end = corners[:, following, :]
         delta = end - start
         length = np.hypot(delta[:, 0], delta[:, 1])
         safe = np.maximum(length, 1e-300)
         normal = np.stack([delta[:, 1], -delta[:, 0]], axis=1) / safe[:, None]
         normal *= winding[:, None]
-        flux = problem.tri_sheet_conductance * (gradients * normal).sum(axis=1)
-        np.add.at(jump_per_edge, tri_edges[:, k], flux)
-        edge_length[tri_edges[:, k]] = length
+
+        at_start = _normal_flux(problem, node_values, normal, _vertex_barycentric(k))
+        at_end = _normal_flux(problem, node_values, normal, _vertex_barycentric(following))
+
+        edge_index = tri_edges[:, k]
+        forward = triangles[:, k] == edges[edge_index, 0]
+        np.add.at(jump_at[:, 0], edge_index, np.where(forward, at_start, at_end))
+        np.add.at(jump_at[:, 1], edge_index, np.where(forward, at_end, at_start))
+        edge_length[edge_index] = length
+
+    # Exact integral of a linear function's square along the edge:
+    # int_e J^2 = |e| (J0^2 + J0 J1 + J1^2) / 3.
+    first, second = jump_at[:, 0], jump_at[:, 1]
+    integral = edge_length * (first**2 + first * second + second**2) / 3.0
 
     squared = np.zeros(len(triangles), dtype=np.float64)
     for k in range(3):
         index = tri_edges[:, k]
-        squared += 0.5 * (edge_length[index] ** 2) * (jump_per_edge[index] ** 2)
+        squared += 0.5 * edge_length[index] * integral[index]
     return np.sqrt(squared)
+
+
+def _vertex_barycentric(local_vertex: int) -> npt.NDArray[np.float64]:
+    """Barycentric coordinates of one of a triangle's three vertices."""
+    lam = np.zeros(3, dtype=np.float64)
+    lam[local_vertex] = 1.0
+    return lam
+
+
+def _normal_flux(
+    problem: SheetProblem,
+    node_values: npt.NDArray[np.float64],
+    normal: npt.NDArray[np.float64],
+    barycentric: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Outward normal sheet current at one point of each element."""
+    gradients = element_gradients(problem, node_values, barycentric)
+    flux: npt.NDArray[np.float64] = problem.tri_sheet_conductance * (gradients * normal).sum(axis=1)
+    return flux
 
 
 def global_error_estimate(indicators: npt.NDArray[np.float64]) -> float:

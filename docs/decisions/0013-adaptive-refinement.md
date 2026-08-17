@@ -141,10 +141,10 @@ an error estimator can drive.
 ## Measured (implementation, 2026-08-16)
 
 * **Adaptivity pays only when error and copper are in different places.** On
-  `plane_neck_plane_board` (two planes joined by a narrow neck) adaptive
-  refinement reaches the reference band at `413` DOFs where global refinement
-  is still `4.7e-3` off at `2465` DOFs -- a clear win, because shrinking the
-  global element size floods two large planes that barely affect the answer.
+  `plane_neck_plane_board` (two planes joined by a narrow neck) adaptive P1
+  reaches `3.7e-3` at `513` DOFs where uniform P1 needs `35,976` for
+  `5.3e-3` -- a clear win, because shrinking the global element size floods
+  two large planes that barely affect the answer.
   On `series_widths_board` it does **not** beat uniform: total resistance is
   spread along the whole conduction path, the estimator points at the
   reentrant corner, and refining the corner barely moves the answer. Neither
@@ -158,6 +158,20 @@ an error estimator can drive.
   measured form of the non-nested consequence noted above, and it is why
   ADR-0015 §6 requires an extrapolation to *verify* monotonicity rather than
   assume it.
+* **P2 and adaptivity compose, and together they are the tier's argument.**
+  Against a converged reference on `plane_neck_plane_board`
+  (`6.882549 mOhm`): uniform P1 needs `143,213` DOFs to reach `2.0e-3`, while
+  adaptive P2 reaches `1.1e-3` at `1,388` -- about a hundredfold fewer
+  degrees of freedom for a better answer. Adaptive P1 sits between them
+  (`3.7e-3` at `513`).
+* **An unconverged reference silently corrupted the first measurement.**
+  Phase 2 took its reference from the finest *uniform P1* mesh, which was
+  itself still `0.5 %` from the answer and rising; errors quoted against it
+  were wrong, including one that looked like `1.3e-4` and was really
+  `5.4e-3`. P1 climbs towards the limit while P2 settles onto it, so the two
+  orders disagreeing by more than their apparent convergence is the signal
+  that the reference, not the method, is at fault. A reference must be
+  demonstrably converged, not merely the finest run to hand.
 * **The stopping rule needs the estimator, not just the quantity of
   interest.** A first implementation stopped on QoI change plus conservation
   alone and declared convergence on two successive meshes that happened to

@@ -115,6 +115,12 @@ extension of that pipeline, not a parallel one.
   resistance is spread along the whole path. Adaptivity pays when error and
   copper are in different places. Reaching for it on a board where they are
   not is wasted compute, not a bug to chase.
+* **Check your reference before trusting any error figure.** A reference
+  taken from the finest *uniform P1* mesh was 0.5 % off and made every error
+  measured against it wrong. P1 climbs towards the limit while P2 settles
+  onto it -- when the two orders disagree by more than their own apparent
+  convergence, suspect the reference first. Measured: adaptive P2 reaches
+  1.1e-3 at 1,388 DOFs where uniform P1 needs 143,213 for 2.0e-3.
 * **Re-meshing noise is the floor on any convergence claim.** Successive
   meshes are non-nested, and re-meshing alone moves terminal resistance by a
   few parts per thousand. Do not assert monotone error decrease that the

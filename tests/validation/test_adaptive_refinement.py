@@ -5,9 +5,9 @@ the estimator points beat spending them everywhere". The answer measured here
 is **it depends on the board, and the dependence is predictable**:
 
 * `plane_neck_plane_board` -- error concentrated in a neck, copper mostly
-  elsewhere. Adaptive reaches the reference band at roughly 400-700 DOFs
-  where global refinement is still several times worse at 2465. Adaptivity
-  wins clearly.
+  elsewhere. Adaptive P1 reaches 3.7e-3 at 513 DOFs where uniform P1 needs
+  35,976 DOFs for 5.3e-3. Adaptivity wins clearly. (Adding P2 on top takes
+  this to 1.1e-3 at 1,388 DOFs -- see `test_reference_tier.py`.)
 * `series_widths_board` -- total resistance spread along the whole path.
   Refining the reentrant corner the estimator flags barely moves the answer,
   and adaptive does *not* beat uniform. That is not a defect in the loop; it
@@ -80,8 +80,24 @@ def _study(board, element_size_m: float) -> AnalysisStudy:
 
 
 def _uniform(board, normalized, element_size_m: float) -> tuple[int, float]:
-    result, _, problem = solve_with_controls(board, _study(board, element_size_m), normalized)
+    result, _, problem, _ = solve_with_controls(
+        board, _study(board, element_size_m), normalized
+    )
     return problem.n_dofs, terminal_resistance_qoi(result)
+
+
+#: Converged terminal resistance of `plane_neck_plane_board`, in ohms.
+#:
+#: Measured with uniform P2 at a 31.25 um target size -- 571,557 DOFs, the
+#: most refined solve run on this board. The P2 sequence settles here
+#: (6.9405, 6.8729, 6.8787, 6.8825 mOhm at 9.6k/36k/143k/572k DOFs) while the
+#: P1 sequence is still climbing towards it (6.8689 mOhm at 143k DOFs).
+#:
+#: This constant exists because an earlier version of this file used the
+#: finest *uniform P1* mesh as its reference, which was still 0.5 % off and
+#: silently corrupted every error figure measured against it. A reference has
+#: to be demonstrably converged, not merely the finest thing to hand.
+_REFERENCE_OHM = 6.882549e-3
 
 
 @pytest.fixture(scope="module")
@@ -89,11 +105,7 @@ def neck_case():
     board = plane_neck_plane_board()
     normalizer = ShapelyGeometryNormalizer()
     normalized = normalizer.normalize(board)
-    # The finest global mesh is the reference. It carries a few parts per
-    # thousand of uncertainty of its own -- see the module docstring -- so it
-    # is used to define a band, not an exact target.
-    reference = _uniform(board, normalized, 0.0625e-3)[1]
-    return board, normalizer, normalized, reference
+    return board, normalizer, normalized, _REFERENCE_OHM
 
 
 class TestAdaptivityPaysWhenErrorIsConcentrated:
@@ -109,10 +121,10 @@ class TestAdaptivityPaysWhenErrorIsConcentrated:
             normalizer,
             AdaptivePolicy(target_qoi_rel_change=1e-4, max_passes=5, max_dofs=400_000),
         )
-        best = min(
-            outcome.generations,
-            key=lambda g: abs(g.quantity_of_interest - reference),
-        )
+        # The *final* generation, not whichever one happened to land closest:
+        # picking the best of a noisy sequence after the fact would flatter
+        # the method rather than measure it.
+        best = outcome.final
         adaptive_error = abs(best.quantity_of_interest - reference) / reference
         uniform_mid_error = abs(mid_r - reference) / reference
         uniform_coarse_error = abs(coarse_r - reference) / reference

@@ -30,7 +30,7 @@ from openpdn.domain.results import (
     SolverRunStats,
     TerminalResult,
 )
-from openpdn.domain.study import ViaModel
+from openpdn.domain.study import ElementOrder, ViaModel
 from openpdn.domain.units import AMPERE, VOLT
 from openpdn.solver.api import (
     SolverCapabilities,
@@ -111,6 +111,7 @@ class FemSheetSolver:
             capabilities=SolverCapabilities(
                 fidelity=ResultFidelity.SHEET_2P5D,
                 via_models=frozenset({ViaModel.LUMPED_CONDUCTANCE}),
+                element_orders=frozenset({ElementOrder.P1, ElementOrder.P2}),
                 supports_resistance_probes=True,
                 supports_current_density=True,
                 supports_power_loss=True,
@@ -161,15 +162,16 @@ def solve_with_controls(
     study: AnalysisStudy,
     normalized: NormalizedGeometry,
     refinement: RefinementField | None = None,
-) -> tuple[ElectricalAnalysisResult, FemFieldData, SheetProblem]:
+) -> tuple[ElectricalAnalysisResult, FemFieldData, SheetProblem, npt.NDArray[np.float64]]:
     """Solve with an explicit refinement field, returning the problem too.
 
     The adaptive loop (`adaptive.py`) needs three things the public
     `solve_with_fields` does not expose: control over the sizing field
     between passes, the already-normalised geometry reused across passes
     (it cannot change under refinement), and the assembled problem, which is
-    what the error estimator reads. Kept here rather than in `adaptive` so
-    the excitation and result-building logic has exactly one implementation.
+    what the error estimator reads, together with the potential at every node.
+    Kept here rather than in `adaptive` so the excitation and result-building
+    logic has exactly one implementation.
     """
     study.validate_against(board)
     controls = _controls_for(board, study)
@@ -178,10 +180,12 @@ def solve_with_controls(
     started = time.perf_counter()
     problem = build_problem(board, study, normalized, controls)
     assembly_seconds = time.perf_counter() - started
-    result, field_data = _solve_prepared(
+    result, field_data, solution = _solve_prepared_with_solution(
         problem, board, study, assembly_seconds, cache_hit=False
     )
-    return result, field_data, problem
+    # Potentials at every node, midpoints included -- what the estimator reads.
+    node_values = solution.voltage_v[problem.dof_of_node]
+    return result, field_data, problem, node_values
 
 
 @dataclass(frozen=True)
@@ -251,14 +255,20 @@ def _cache_key(board: Board, study: AnalysisStudy) -> str:
     return digest.hexdigest()
 
 
-def _solve_prepared(
+def _solve_prepared_with_solution(
     problem: SheetProblem,
     board: Board,
     study: AnalysisStudy,
     assembly_seconds: float,
     cache_hit: bool,
-) -> tuple[ElectricalAnalysisResult, FemFieldData]:
-    """Apply the study's excitation to an assembled problem and post-process."""
+) -> tuple[ElectricalAnalysisResult, FemFieldData, Solution]:
+    """Apply the study's excitation to an assembled problem and post-process.
+
+    Returns the raw nodal `Solution` alongside the result because the error
+    estimator needs potentials at *every* node -- at P2 that includes edge
+    midpoints, which `FemFieldData` deliberately omits since it is published
+    against the vertex block.
+    """
     diagnostics: list[Diagnostic] = list(problem.diagnostics)
 
     dirichlet: dict[int, float] = {}
@@ -361,6 +371,21 @@ def _solve_prepared(
         ),
         conservation=conservation,
         matrix_nonzeros=int(problem.matrix.nnz),
+    )
+    return result, field_data, solution
+
+
+def _solve_prepared(
+    problem: SheetProblem,
+    board: Board,
+    study: AnalysisStudy,
+    assembly_seconds: float,
+    *,
+    cache_hit: bool,
+) -> tuple[ElectricalAnalysisResult, FemFieldData]:
+    """Solve one excitation, discarding the raw nodal solution."""
+    result, field_data, _ = _solve_prepared_with_solution(
+        problem, board, study, assembly_seconds, cache_hit=cache_hit
     )
     return result, field_data
 
