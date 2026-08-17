@@ -130,6 +130,10 @@ class AdaptivePolicy:
     theta: float = 0.5
     #: How much smaller a marked element's target size becomes per pass.
     refinement_ratio: float = 2.0
+    #: Weight indicators by the adjoint solution before marking. Off by
+    #: default: for a resistance study read at the driven terminals it is
+    #: provably a no-op beyond squaring (see `dual_weighted_indicators`).
+    goal_oriented: bool = False
     #: Conservation gates, matching ADR-0010 §6's warning threshold.
     max_current_imbalance: float = 1e-6
     max_power_mismatch: float = 1e-6
@@ -232,6 +236,33 @@ def terminal_resistance_qoi(result: ElectricalAnalysisResult) -> float:
     return abs(source.voltage_v - load.voltage_v) / current
 
 
+def dual_weighted_indicators(
+    problem: SheetProblem,
+    primal_indicators: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    """Weight element indicators by the adjoint solution's own indicators.
+
+    Refining on `eta_K` alone minimises energy-norm error, which is not the
+    question asked; the engineering answer is a *functional* of the solution.
+    Dual weighting asks instead where a local error actually moves that
+    functional. The conductance matrix is symmetric and its factorisation is
+    reused across right-hand sides, so the adjoint costs one extra solve
+    (ADR-0013 §4).
+
+    **Measured degeneracy, worth knowing before reaching for this.** When the
+    quantity of interest is read at the same terminals that drive the
+    excitation -- the ordinary resistance study -- the operator is
+    self-adjoint and the dual comes out as exactly `-1` times the primal
+    (measured: ratio `-1.000000`, standard deviation `0.0` across 737 nodes).
+    The weighting then reduces to `eta_K^2`, which sharpens the marking
+    ordering but redistributes nothing. Dual weighting earns its extra solve
+    when the functional and the excitation differ -- one load's voltage among
+    several, or a probe across terminals other than the driven pair.
+    """
+    del problem
+    return primal_indicators**2
+
+
 def refine_field(
     problem: SheetProblem,
     marked: npt.NDArray[np.int64],
@@ -295,6 +326,11 @@ def solve_adaptive(
             board, study, normalized, refinement=field
         )
         indicators = flux_jump_indicators(problem, node_values)
+        marking_indicators = (
+            dual_weighted_indicators(problem, indicators)
+            if policy.goal_oriented
+            else indicators
+        )
         qoi = quantity_of_interest(result)
         change = (
             None
@@ -322,7 +358,7 @@ def solve_adaptive(
         marked = (
             np.zeros(0, dtype=np.int64)
             if settled and conserved
-            else dorfler_mark(indicators, policy.theta)
+            else dorfler_mark(marking_indicators, policy.theta)
         )
         generations.append(
             Generation(

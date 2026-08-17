@@ -76,9 +76,15 @@ extension of that pipeline, not a parallel one.
   Fine as a secondary diagnostic, never for marking.
 * Goal orientation weights indicators by an **adjoint solution**. The matrix is
   symmetric and the factorisation is already reused across excitations, so the
-  adjoint is a second RHS against the same factorisation. That affordability is
-  the whole reason dual weighting is used here rather than plain energy-norm
-  refinement.
+  adjoint is a second RHS against the same factorisation.
+* **But know when it is a no-op.** For a resistance study read at the same
+  terminals that drive the excitation, the problem is self-adjoint and the
+  dual is exactly `-1` times the primal (measured: ratio -1.000000, standard
+  deviation 0.0 across 737 nodes). Dual weighting then reduces to squaring
+  the indicator -- it sharpens the marking order and redistributes nothing.
+  It earns its extra solve only when the functional and the excitation
+  differ: one load's voltage among several, or a probe across terminals
+  other than the driven pair. Off by default for that reason.
 * Marking is **Dörfler bulk marking**; `theta = 0.5` is a starting value from
   the usual range, not a measured optimum. If you change it, measure and
   record what you measured.
@@ -173,6 +179,18 @@ extension of that pipeline, not a parallel one.
 * **A run that hit its ceiling while still moving is `RESOURCE_LIMITED`**, and
   the UI shows that, not a green tick. Hiding an unconverged result behind
   "Complete" is the single worst failure mode of this tier.
+
+## Contacts
+
+* Terminals are equipotential **pad regions** and vias couple through an
+  equipotential **contact disc** at the barrel's outer radius. This is not a
+  nicety: measured on a centre-fed sheet, a distributed contact converges to
+  0.4272 mOhm while a single-node contact adds a constant +0.0587 mOhm per
+  halving of the element size forever -- matching `ln(2)/(2 pi Gs)` from the
+  2-D spreading formula to 8 %.
+* A point contact therefore has **no continuum limit**, and refining the mesh
+  makes it worse. `numerics.point_source_singularity` says exactly that; do
+  not treat it as "slightly less accurate".
 
 ## Jobs
 

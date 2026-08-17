@@ -74,3 +74,28 @@ implementations were inspected before building:
   (boundary fidelity is sampling-based), current crowding inside barrels and
   vertical near-pad fields are outside the 2.5-D model, and triangle quality
   is reported but not guaranteed by construction.
+
+## Measured (contact models, 2026-08-16)
+
+Decision §4 asserted that a single-node via coupling "would accrue a
+logarithmically mesh-dependent spreading resistance", and §3 degrades an
+outline-less pad to its nearest vertex with a diagnostic. Both claims are now
+measured on `centre_contact_sheet_board`, a square sheet fed at its centre:
+
+    h (mm)     DOFs      contact disc      point contact
+    0.400        723      0.403011 mOhm     0.482040 mOhm
+    0.200      2,811      0.415155          0.534873
+    0.100     11,127      0.423298          0.580872
+    0.050     44,094      0.427280          0.639541
+    0.025    175,927      0.427238          0.698235
+
+The distributed contact converges to about `0.4272 mOhm`, its increments
+falling away. The point contact adds a **constant** `+0.0587 mOhm` per
+halving of the element size with no sign of stopping -- the signature of a
+logarithm, against `ln(2) / (2 pi Gs) = 0.0543 mOhm` predicted by the 2-D
+spreading formula, an 8 % match on a discrete mesh.
+
+So the distributed coupling is not a refinement of the single-node model, it
+is the difference between a converging quantity and a diverging one, and
+`numerics.point_source_singularity` marks a result whose value has no
+continuum limit -- one that gets *worse* under refinement, not better.

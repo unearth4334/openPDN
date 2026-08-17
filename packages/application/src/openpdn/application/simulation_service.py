@@ -162,6 +162,7 @@ class SimulationService:
             via_plating_m=draft.via_plating_m,
             solver_name=self._solver_name,
             solver_version=self._solver_version,
+            reference_policy=draft.reference_policy,
         )
         now = self._clock()
         nets_by_id = {str(net.id): net for net in board.nets}
@@ -187,6 +188,7 @@ class SimulationService:
             solver_name=self._solver_name,
             created_at_epoch_s=now,
             signature=signature,
+            reference_policy=draft.reference_policy,
         )
         return SimulationPlan(
             estimate=estimate,

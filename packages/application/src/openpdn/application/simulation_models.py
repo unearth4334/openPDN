@@ -38,12 +38,24 @@ class SimulationKind(StrEnum):
 
 
 class AccuracyProfile(StrEnum):
-    """User-facing accuracy levels; each resolves to concrete mesh numbers."""
+    """User-facing accuracy levels.
+
+    The first four resolve to concrete mesh numbers before queueing.
+    `REFERENCE` does not: it freezes an adaptive *policy* instead, because
+    under goal-oriented refinement the mesh is the run's output rather than
+    its input (ADR-0015 §1).
+    """
 
     PREVIEW = "preview"
     STANDARD = "standard"
     HIGH = "high"
     VERIFICATION = "verification"
+    REFERENCE = "reference"
+
+    @property
+    def is_adaptive(self) -> bool:
+        """True when the mesh is decided during the run, not before it."""
+        return self is AccuracyProfile.REFERENCE
 
 
 class JobState(StrEnum):
@@ -95,6 +107,41 @@ ALLOWED_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.FAILED: frozenset(),
     JobState.CANCELLED: frozenset(),
 }
+
+
+class ResultQuality(StrEnum):
+    """What a finished Reference run is actually claiming (ADR-0015 §3).
+
+    A property of the *result*, deliberately not of the job lifecycle:
+    `ALLOWED_TRANSITIONS` stays the single source of truth for states, and
+    these map onto it. Anything short of `CONVERGED` maps to
+    `COMPLETED_WITH_WARNINGS`, which exists precisely so a finished job that
+    must not read as clean does not.
+    """
+
+    CONVERGED = "converged"
+    CONVERGED_WITH_MODEL_LIMITATIONS = "converged_with_model_limitations"
+    RESOURCE_LIMITED = "resource_limited"
+    NOT_CONVERGED = "not_converged"
+    NUMERICAL_FAILURE = "numerical_failure"
+
+    @property
+    def job_state(self) -> JobState:
+        """The lifecycle state this quality maps onto."""
+        if self is ResultQuality.CONVERGED:
+            return JobState.COMPLETED
+        if self is ResultQuality.NUMERICAL_FAILURE:
+            return JobState.FAILED
+        return JobState.COMPLETED_WITH_WARNINGS
+
+    @property
+    def is_trustworthy(self) -> bool:
+        """Whether the engineering answer may be relied on as converged."""
+        return self in {
+            ResultQuality.CONVERGED,
+            ResultQuality.CONVERGED_WITH_MODEL_LIMITATIONS,
+        }
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +214,9 @@ class SimulationDraft:
     to_terminal_ids: tuple[str, ...] = ()
     to_via_ids: tuple[str, ...] = ()
     via_plating_m: float | None = None
+    #: Adaptive policy, required by the Reference profile and rejected by
+    #: every other one -- a fixed-mesh profile has nothing to adapt.
+    reference_policy: ReferencePolicy | None = None
 
     def __post_init__(self) -> None:
         """Validate the shape of the request (referential checks come later)."""
@@ -203,6 +253,18 @@ class SimulationDraft:
                 raise SimulationRequestError("Resistance endpoints must not share a terminal")
         if self.kind is SimulationKind.IR_DROP and not self.loads:
             raise SimulationRequestError("An IR-drop study needs at least one load")
+        if self.accuracy.is_adaptive and self.reference_policy is None:
+            raise SimulationRequestError(
+                "The Reference profile is defined by its adaptive policy, not by a "
+                "mesh; supply one"
+            )
+        if not self.accuracy.is_adaptive and self.reference_policy is not None:
+            # A fixed-mesh profile has nothing to adapt. Silently ignoring the
+            # policy would let a user believe a Standard job was refining.
+            raise SimulationRequestError(
+                f"The {self.accuracy.value} profile resolves to a fixed mesh and "
+                "cannot carry an adaptive policy"
+            )
         source_members = {*self.source_terminal_ids, *self.source_via_ids}
         load_members = {
             member for load in self.loads for member in (*load.terminal_ids, *load.via_ids)
@@ -215,6 +277,64 @@ class SimulationDraft:
             # request fails immediately instead of after a wasted mesh
             # build and solve.
             raise SimulationRequestError(f"A source and a load both attach to {sorted(overlap)!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ReferencePolicy:
+    """What a Reference run is aiming at, frozen at queue time.
+
+    ADR-0011 requires a spec to store resolved absolute numbers so a re-run
+    years later does not depend on that day's profile definitions. For an
+    adaptive run the determining input is a *policy*, not a mesh -- the mesh
+    is what the run produces. Freezing every knob here keeps ADR-0011's
+    rationale intact while ADR-0015 §1 relaxes its letter.
+    """
+
+    target_qoi_rel_change: float = 1e-3
+    max_passes: int = 5
+    max_dofs: int = 2_000_000
+    theta: float = 0.5
+    refinement_ratio: float = 2.0
+    element_order: str = "p2"
+    goal_oriented: bool = False
+    linear_backend: str = "auto"
+    linear_tolerance_fraction: float = 0.05
+
+    def __post_init__(self) -> None:
+        """Reject policies that could never terminate or never refine."""
+        if not 0.0 < self.target_qoi_rel_change < 1.0:
+            raise SimulationRequestError("Reference target must be a fraction between 0 and 1")
+        if self.max_passes < 1:
+            raise SimulationRequestError("A Reference run needs at least one pass")
+        if self.max_dofs < 1:
+            raise SimulationRequestError("Reference DOF ceiling must be positive")
+        if not 0.0 < self.theta <= 1.0:
+            raise SimulationRequestError("Dorfler theta must be in (0, 1]")
+        if self.refinement_ratio <= 1.0:
+            raise SimulationRequestError("Refinement ratio must exceed 1")
+        if self.element_order not in {"p1", "p2"}:
+            raise SimulationRequestError(f"Unknown element order {self.element_order!r}")
+        if self.linear_backend not in {"auto", "direct", "iterative"}:
+            raise SimulationRequestError(f"Unknown linear backend {self.linear_backend!r}")
+
+    def to_payload(self) -> dict[str, Any]:
+        """Serialise for the job spec."""
+        return {
+            "target_qoi_rel_change": self.target_qoi_rel_change,
+            "max_passes": self.max_passes,
+            "max_dofs": self.max_dofs,
+            "theta": self.theta,
+            "refinement_ratio": self.refinement_ratio,
+            "element_order": self.element_order,
+            "goal_oriented": self.goal_oriented,
+            "linear_backend": self.linear_backend,
+            "linear_tolerance_fraction": self.linear_tolerance_fraction,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> ReferencePolicy:
+        """Rebuild from a stored job spec."""
+        return cls(**payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,11 +363,15 @@ class SimulationJobSpec:
     solver_name: str
     created_at_epoch_s: float
     signature: str
+    #: Reference profile: the adaptive policy, frozen in place of a fixed
+    #: mesh. `None` for every non-adaptive profile, including schema-2 rows
+    #: that predate the tier.
+    reference_policy: ReferencePolicy | None = None
 
     def to_json(self) -> str:
         """Serialise for durable storage."""
         payload: dict[str, Any] = {
-            "schema": 2,
+            "schema": 3,
             "job_id": self.job_id,
             "name": self.name,
             "kind": self.kind.value,
@@ -270,6 +394,9 @@ class SimulationJobSpec:
             "to_terminal_ids": list(self.to_terminal_ids),
             "to_via_ids": list(self.to_via_ids),
             "accuracy": self.accuracy.value,
+            "reference_policy": (
+                None if self.reference_policy is None else self.reference_policy.to_payload()
+            ),
             "mesh": {
                 "max_element_m": self.mesh.max_element_m,
                 "min_element_m": self.mesh.min_element_m,
@@ -292,6 +419,11 @@ class SimulationJobSpec:
         keep loading: their singular `source_terminal_id`/`to_terminal_id`/
         per-load `terminal_id` upgrade to one-member plural groups here
         rather than at the call site, so every reader gets the same shape.
+
+        Schema 2 rows predate the Reference tier and carry no adaptive
+        policy; they load with `reference_policy=None`, which is exactly
+        right -- they were queued against a fixed mesh and must re-run that
+        way.
         """
         data = json.loads(raw)
         source_terminal_ids = _upgrade_ids(data, "source_terminal_ids", "source_terminal_id")
@@ -319,6 +451,11 @@ class SimulationJobSpec:
             to_terminal_ids=to_terminal_ids,
             to_via_ids=tuple(data.get("to_via_ids") or ()),
             accuracy=AccuracyProfile(data["accuracy"]),
+            reference_policy=(
+                ReferencePolicy.from_payload(data["reference_policy"])
+                if data.get("reference_policy")
+                else None
+            ),
             mesh=ResolvedMeshSpec(
                 max_element_m=data["mesh"]["max_element_m"],
                 min_element_m=data["mesh"]["min_element_m"],
@@ -358,12 +495,18 @@ def analysis_signature(
     via_plating_m: float | None,
     solver_name: str,
     solver_version: str,
+    reference_policy: ReferencePolicy | None = None,
 ) -> str:
     """Deterministic hash over every solver-affecting input.
 
     Identical signatures mean identical numerical outcomes (same code, same
     inputs); anything else -- including a solver version bump -- changes the
-    signature and therefore never silently reuses a stale result. Group
+    signature and therefore never silently reuses a stale result.
+
+    For an adaptive run the frozen *policy* is hashed rather than a mesh,
+    since the mesh is the run's output (ADR-0015 §2). That keeps exact-match
+    reuse sound only because the adaptive loop is deterministic: identical
+    policy and inputs produce an identical result. Group
     membership is order-independent, so terminal/via ids are sorted before
     hashing: two drafts naming the same attachment group in a different pick
     order must still be recognised as the same study.
@@ -392,6 +535,9 @@ def analysis_signature(
             ],
             "verify": verify_convergence,
             "plating": via_plating_m,
+            "reference_policy": (
+                None if reference_policy is None else reference_policy.to_payload()
+            ),
             "solver": [solver_name, solver_version],
         },
         sort_keys=True,

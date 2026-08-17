@@ -384,6 +384,55 @@ def plane_neck_plane_board(
     )
 
 
+def centre_contact_sheet_board(*, point_contact: bool, side_m: float = 10e-3) -> Board:
+    """A square sheet fed at its centre, drained at one edge.
+
+    Exists to measure what happens at the *contact* itself. Injecting current
+    into a 2-D sheet at a single point has no finite potential: the continuum
+    solution goes like `-(I / 2 pi Gs) ln(r)`, so the resistance seen at the
+    injection point grows without bound as the mesh shrinks. Spreading the
+    contact over a pad of fixed radius removes the singularity, and this
+    board can be built either way to show the difference.
+
+    Args:
+        point_contact: When true the centre pad carries no outline, which is
+            the production fallback for a pad whose geometry is missing --
+            the solver degrades it to its nearest vertex and flags
+            `numerics.point_source_singularity`.
+        side_m: Sheet edge length.
+    """
+    pad_side = 0.2e-3
+    drain_width = 0.5e-3
+    centre = side_m / 2.0
+    pad_b, term_b = rect_pad_terminal(
+        "b", "L1", side_m - drain_width, 0.0, drain_width, side_m
+    )
+    outline = (
+        None
+        if point_contact
+        else Polygon2D.rectangle(
+            Point2D(centre - pad_side / 2.0, centre - pad_side / 2.0), pad_side, pad_side
+        )
+    )
+    pad_a = Pad(
+        id=PadId("pad-a"),
+        layer_id=LayerId("L1"),
+        position=Point2D(centre, centre),
+        net_id=NET,
+        outline=outline,
+    )
+    term_a = Terminal(id=TerminalId("term-a"), name="a", net_id=NET, pad_ids=(PadId("pad-a"),))
+    return Board(
+        id=BoardId("val-centre-contact"),
+        name="validation centre-contact sheet",
+        stackup=Stackup((conductive_layer("L1", 0),)),
+        nets=(Net(id=NET, name="DUT"),),
+        copper_regions=(rect_region("sheet", "L1", 0.0, 0.0, side_m, side_m),),
+        pads=(pad_a, pad_b),
+        terminals=(term_a, term_b),
+    )
+
+
 def disconnected_islands_board() -> Board:
     """Two copper islands of the same net with no conductive path between."""
     pad_a, term_a = rect_pad_terminal("a", "L1", 0.0, 0.0, 1e-3, 1e-3)
