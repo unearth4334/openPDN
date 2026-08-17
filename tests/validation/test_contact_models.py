@@ -138,9 +138,7 @@ class TestPointContactDiverges:
         measured = abs(point_sweep[-1] - point_sweep[-2])
         assert measured == pytest.approx(expected, rel=0.35)
 
-    def test_a_point_contact_is_always_worse_than_a_distributed_one(
-        self, disc_sweep, point_sweep
-    ):
+    def test_a_point_contact_is_always_worse_than_a_distributed_one(self, disc_sweep, point_sweep):
         assert all(p > d for p, d in zip(point_sweep, disc_sweep, strict=True))
 
 

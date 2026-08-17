@@ -575,9 +575,7 @@ def _bind_terminal_nodes(
             pad = pads_by_id.get(pad_id)
             if pad is None:
                 continue
-            pad_nodes = _nodes_in_pad(
-                pad, terminal.net_id, region_refs, region_meshes, midpoints
-            )
+            pad_nodes = _nodes_in_pad(pad, terminal.net_id, region_refs, region_meshes, midpoints)
             if not pad_nodes:
                 pad_nodes = _nearest_node_to(
                     pad.position.x_m,

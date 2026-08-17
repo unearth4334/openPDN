@@ -141,9 +141,7 @@ class TestRefinementField:
     def test_the_smallest_demand_wins_even_from_a_further_seed(self):
         # Taking only the nearest seed would return 1e-3 here; the minimiser
         # is the further, much finer seed.
-        field = RefinementField(
-            np.array([[0.0, 0.0], [1e-4, 0.0]]), np.array([1e-3, 1e-6])
-        )
+        field = RefinementField(np.array([[0.0, 0.0], [1e-4, 0.0]]), np.array([1e-3, 1e-6]))
         demanded = field.target_at(np.array([[0.0, 0.0]]), growth_rate=0.1, cap_m=1e-2)
         assert demanded[0] < 1e-3
 

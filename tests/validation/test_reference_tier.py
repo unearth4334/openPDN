@@ -104,18 +104,14 @@ class TestReferenceValueItself:
 
 
 class TestQuadraticPlusAdaptive:
-    def test_p2_adaptive_beats_uniform_p1_at_a_fraction_of_the_dofs(
-        self, board_and_normalizer
-    ):
+    def test_p2_adaptive_beats_uniform_p1_at_a_fraction_of_the_dofs(self, board_and_normalizer):
         board, normalizer = board_and_normalizer
         normalized = normalizer.normalize(board)
 
         uniform, _, uniform_problem, _ = solve_with_controls(
             board, _study(board, 0.25e-3, ElementOrder.P1), normalized
         )
-        uniform_error = (
-            abs(terminal_resistance_qoi(uniform) - _REFERENCE_OHM) / _REFERENCE_OHM
-        )
+        uniform_error = abs(terminal_resistance_qoi(uniform) - _REFERENCE_OHM) / _REFERENCE_OHM
 
         outcome = solve_adaptive(
             board,
@@ -123,9 +119,7 @@ class TestQuadraticPlusAdaptive:
             normalizer,
             AdaptivePolicy(target_qoi_rel_change=1e-4, max_passes=4, max_dofs=400_000),
         )
-        adaptive_error = (
-            abs(outcome.final.quantity_of_interest - _REFERENCE_OHM) / _REFERENCE_OHM
-        )
+        adaptive_error = abs(outcome.final.quantity_of_interest - _REFERENCE_OHM) / _REFERENCE_OHM
         assert adaptive_error < uniform_error
         assert outcome.final.dof_count < uniform_problem.n_dofs
 
@@ -142,9 +136,7 @@ class TestQuadraticPlusAdaptive:
             AdaptivePolicy(max_passes=4, max_dofs=400_000),
         )
         estimates = [g.estimated_error for g in outcome.generations]
-        assert all(
-            later < earlier for earlier, later in itertools.pairwise(estimates)
-        )
+        assert all(later < earlier for earlier, later in itertools.pairwise(estimates))
 
     def test_conservation_holds_at_every_generation(self, board_and_normalizer):
         board, normalizer = board_and_normalizer
@@ -202,8 +194,12 @@ class TestPerQuantityConvergence:
             _study(board, 1.0e-3, ElementOrder.P1),
             normalizer,
             # Wide target so the engineering quantities settle immediately.
-            AdaptivePolicy(target_qoi_rel_change=1.0, confirmations=1,
-                           required_error_reduction=1.0, max_passes=3),
+            AdaptivePolicy(
+                target_qoi_rel_change=1.0,
+                confirmations=1,
+                required_error_reduction=1.0,
+                max_passes=3,
+            ),
         )
         assert outcome.status in {
             AdaptiveStatus.CONVERGED,
@@ -245,9 +241,7 @@ class TestExtrapolationRefusesToGuess:
         extrapolated, order = richardson_extrapolate(values, dofs)
         assert (extrapolated, order) == (None, None)
 
-    def test_extrapolation_on_a_real_run_is_either_absent_or_sane(
-        self, board_and_normalizer
-    ):
+    def test_extrapolation_on_a_real_run_is_either_absent_or_sane(self, board_and_normalizer):
         # Whichever way it goes, it must not produce a value far outside the
         # measured band -- refusing is a valid, expected outcome here.
         board, normalizer = board_and_normalizer

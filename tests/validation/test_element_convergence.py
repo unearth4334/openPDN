@@ -150,9 +150,7 @@ class TestStiffnessInvariants:
         # the gradients are wrong, and every solve would leak current.
         points, triangles = _structured_square(4)
         nodes, tri_nodes = (
-            p2_nodes(points, triangles)
-            if order is ElementOrder.P2
-            else (points, triangles)
+            p2_nodes(points, triangles) if order is ElementOrder.P2 else (points, triangles)
         )
         local = element_stiffness(nodes, tri_nodes, np.ones(len(triangles)), order)
         assert np.abs(local.sum(axis=2)).max() < 1e-12
@@ -161,9 +159,7 @@ class TestStiffnessInvariants:
     def test_local_matrices_are_symmetric(self, order: ElementOrder):
         points, triangles = _structured_square(4)
         nodes, tri_nodes = (
-            p2_nodes(points, triangles)
-            if order is ElementOrder.P2
-            else (points, triangles)
+            p2_nodes(points, triangles) if order is ElementOrder.P2 else (points, triangles)
         )
         local = element_stiffness(nodes, tri_nodes, np.ones(len(triangles)), order)
         assert np.abs(local - local.transpose(0, 2, 1)).max() < 1e-12

@@ -336,9 +336,7 @@ def _execute_reference(
         # completed -- but the partial evidence is published and the summary
         # travels with the terminal state so the UI can say "cancelled,
         # partial result available" rather than showing nothing.
-        jobs.transition(
-            job_id, JobState.CANCELLED, result_summary_json=json.dumps(summary)
-        )
+        jobs.transition(job_id, JobState.CANCELLED, result_summary_json=json.dumps(summary))
     return summary
 
 

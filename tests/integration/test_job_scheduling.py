@@ -54,9 +54,7 @@ def _spec(job_id: str, accuracy: AccuracyProfile, queued_at: float) -> Simulatio
         solver_name="fem-2p5d",
         created_at_epoch_s=queued_at,
         signature=f"sig-{job_id}",
-        reference_policy=(
-            ReferencePolicy() if accuracy is AccuracyProfile.REFERENCE else None
-        ),
+        reference_policy=(ReferencePolicy() if accuracy is AccuracyProfile.REFERENCE else None),
         estimated_dofs=1_000,
     )
 
@@ -183,10 +181,7 @@ class TestSchemaMigration:
         legacy.close()
 
         store = SqliteJobStore(path)
-        columns = {
-            row[1]
-            for row in sqlite3.connect(path).execute("PRAGMA table_info(jobs)")
-        }
+        columns = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(jobs)")}
         assert "priority" in columns
         # And the upgraded store is usable.
         _enqueue(store, "after-migration", AccuracyProfile.STANDARD, 100.0)

@@ -244,9 +244,7 @@ class TestServerSideCeilings:
         )
 
     def test_a_policy_within_the_ceilings_is_accepted(self):
-        self._service()._enforce_reference_ceilings(
-            self._draft(max_passes=4, max_dofs=100_000)
-        )
+        self._service()._enforce_reference_ceilings(self._draft(max_passes=4, max_dofs=100_000))
 
     def test_too_many_passes_is_refused(self):
         with pytest.raises(SimulationRequestError, match="above the configured maximum"):
@@ -254,9 +252,7 @@ class TestServerSideCeilings:
 
     def test_too_large_a_dof_ceiling_is_refused(self):
         with pytest.raises(SimulationRequestError, match="above the configured maximum"):
-            self._service()._enforce_reference_ceilings(
-                self._draft(max_dofs=200_000)
-            )
+            self._service()._enforce_reference_ceilings(self._draft(max_dofs=200_000))
 
     def test_refused_rather_than_clamped(self):
         # Silently holding a run to a lower ceiling would make it report

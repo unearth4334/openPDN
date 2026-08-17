@@ -92,10 +92,9 @@ def flux_jump_indicators(
     # Orientation-independent outward normals: for a counter-clockwise
     # triangle the outward normal of edge (k, k+1) is (dy, -dx); a
     # clockwise triangle flips it, and the signed area supplies the sign.
-    signed_area2 = (
-        (corners[:, 1, 0] - corners[:, 0, 0]) * (corners[:, 2, 1] - corners[:, 0, 1])
-        - (corners[:, 2, 0] - corners[:, 0, 0]) * (corners[:, 1, 1] - corners[:, 0, 1])
-    )
+    signed_area2 = (corners[:, 1, 0] - corners[:, 0, 0]) * (corners[:, 2, 1] - corners[:, 0, 1]) - (
+        corners[:, 2, 0] - corners[:, 0, 0]
+    ) * (corners[:, 1, 1] - corners[:, 0, 1])
     winding = np.where(signed_area2 >= 0.0, 1.0, -1.0)
 
     # Jump at each edge's two *global* endpoints, kept in the edge's own

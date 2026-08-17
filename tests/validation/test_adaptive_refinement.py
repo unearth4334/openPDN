@@ -80,9 +80,7 @@ def _study(board, element_size_m: float) -> AnalysisStudy:
 
 
 def _uniform(board, normalized, element_size_m: float) -> tuple[int, float]:
-    result, _, problem, _ = solve_with_controls(
-        board, _study(board, element_size_m), normalized
-    )
+    result, _, problem, _ = solve_with_controls(board, _study(board, element_size_m), normalized)
     return problem.n_dofs, terminal_resistance_qoi(result)
 
 

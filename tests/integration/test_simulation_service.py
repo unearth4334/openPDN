@@ -167,6 +167,4 @@ class TestServerSideRefusals:
 
     def test_a_fixed_mesh_profile_carrying_a_policy_is_refused(self, service):
         with pytest.raises(SimulationRequestError, match="cannot carry an adaptive policy"):
-            service.plan(
-                _draft(AccuracyProfile.STANDARD, reference_policy=ReferencePolicy())
-            )
+            service.plan(_draft(AccuracyProfile.STANDARD, reference_policy=ReferencePolicy()))

@@ -143,7 +143,6 @@ class ResultQuality(StrEnum):
         }
 
 
-
 @dataclass(frozen=True, slots=True)
 class LoadSpec:
     """One load attachment group drawing a fixed current.
@@ -255,8 +254,7 @@ class SimulationDraft:
             raise SimulationRequestError("An IR-drop study needs at least one load")
         if self.accuracy.is_adaptive and self.reference_policy is None:
             raise SimulationRequestError(
-                "The Reference profile is defined by its adaptive policy, not by a "
-                "mesh; supply one"
+                "The Reference profile is defined by its adaptive policy, not by a mesh; supply one"
             )
         if not self.accuracy.is_adaptive and self.reference_policy is not None:
             # A fixed-mesh profile has nothing to adapt. Silently ignoring the

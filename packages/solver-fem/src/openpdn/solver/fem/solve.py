@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
     from openpdn.solver.fem.problem import SheetProblem
 
+
 @dataclass(frozen=True)
 class Excitation:
     """One set of boundary conditions on the assembled problem.

@@ -190,9 +190,7 @@ class TestResume:
             assert ours.quantity_of_interest == theirs.quantity_of_interest
         assert resumed.status == full.status
 
-    def test_a_checkpoint_already_at_the_pass_ceiling_still_yields_a_result(
-        self, four_pass_run
-    ):
+    def test_a_checkpoint_already_at_the_pass_ceiling_still_yields_a_result(self, four_pass_run):
         # Edge: the worker died after the final pass boundary was saved but
         # before publishing. The resumed run has nothing left to iterate --
         # it must still produce a result and fields (by re-solving the last
@@ -255,9 +253,7 @@ class TestInlineReference:
         from openpdn.infrastructure.simulation_worker import run_inline
 
         board = plane_neck_plane_board()
-        result, fields, history = run_inline(
-            _spec(), board, ShapelyGeometryNormalizer()
-        )
+        result, fields, history = run_inline(_spec(), board, ShapelyGeometryNormalizer())
         assert result is not None
         assert fields is not None
         assert history is not None
@@ -274,9 +270,7 @@ class TestInlineReference:
         from openpdn.infrastructure.simulation_worker import run_inline
 
         board = plane_neck_plane_board()
-        spec = replace(
-            _spec(), accuracy=AccuracyProfile.STANDARD, reference_policy=None
-        )
+        spec = replace(_spec(), accuracy=AccuracyProfile.STANDARD, reference_policy=None)
         _, _, history = run_inline(spec, board, ShapelyGeometryNormalizer())
         assert history is None
 
@@ -333,9 +327,7 @@ class TestCheckpointFileFormat:
         # misreading them.
         _, _, captured = four_pass_run
         _save_checkpoint(store, _spec(), captured[0])
-        payload = json.loads(
-            (store.checkpoint_dir(_JOB_ID) / "checkpoint.json").read_text()
-        )
+        payload = json.loads((store.checkpoint_dir(_JOB_ID) / "checkpoint.json").read_text())
         assert payload["schema"] == 1
         assert payload["signature"] == "sig-checkpoint"
         assert isinstance(payload["generations"], list)

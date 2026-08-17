@@ -130,8 +130,7 @@ class TestCrossValidation:
         problem, direct, iterative = solved_both
         del problem
         finite = ~(
-            (direct.voltage_v != direct.voltage_v)
-            | (iterative.voltage_v != iterative.voltage_v)
+            (direct.voltage_v != direct.voltage_v) | (iterative.voltage_v != iterative.voltage_v)
         )
         spread = max(abs(direct.voltage_v[finite]).max(), 1e-30)
         assert abs(direct.voltage_v[finite] - iterative.voltage_v[finite]).max() < 1e-9 * spread
@@ -140,9 +139,7 @@ class TestCrossValidation:
         problem, direct, iterative = solved_both
         drawn = {problem.load_dofs[_LOAD]: 1.0}
         reports = [
-            conservation_report(
-                problem, solution, element_fields(problem, solution), drawn
-            )
+            conservation_report(problem, solution, element_fields(problem, solution), drawn)
             for solution in (direct, iterative)
         ]
         assert reports[1].dissipated_power_w == pytest.approx(

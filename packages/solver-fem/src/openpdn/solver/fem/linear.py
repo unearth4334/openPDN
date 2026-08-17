@@ -243,9 +243,7 @@ def _build_preconditioner(matrix: sp.csc_matrix) -> tuple[LinearOperator, str]:
     if amg_available():
         import pyamg
 
-        hierarchy = pyamg.smoothed_aggregation_solver(
-            sp.csr_matrix(matrix), max_coarse=300
-        )
+        hierarchy = pyamg.smoothed_aggregation_solver(sp.csr_matrix(matrix), max_coarse=300)
         return hierarchy.aspreconditioner(cycle="V"), "pyamg-smoothed-aggregation"
     diagonal = matrix.diagonal().astype(np.float64)
     safe = np.where(np.abs(diagonal) > 0.0, diagonal, 1.0)

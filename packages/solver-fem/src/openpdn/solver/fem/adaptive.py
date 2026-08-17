@@ -377,9 +377,7 @@ def solve_adaptive(
     normalized = normalizer.normalize(board)
     field: RefinementField | None = resume.field if resume is not None else None
     generations: list[Generation] = list(resume.generations) if resume is not None else []
-    previous_qoi: float | None = (
-        generations[-1].quantity_of_interest if generations else None
-    )
+    previous_qoi: float | None = generations[-1].quantity_of_interest if generations else None
     streak = resume.streak if resume is not None else 0
     result = None
     status = AdaptiveStatus.NOT_CONVERGED
@@ -392,9 +390,7 @@ def solve_adaptive(
         final_field_data = field_data
         indicators = flux_jump_indicators(problem, node_values)
         marking_indicators = (
-            dual_weighted_indicators(problem, indicators)
-            if policy.goal_oriented
-            else indicators
+            dual_weighted_indicators(problem, indicators) if policy.goal_oriented else indicators
         )
         qoi = quantity_of_interest(result)
         change = (
@@ -407,8 +403,7 @@ def solve_adaptive(
         estimate = global_error_estimate(indicators)
         first_estimate = generations[0].estimated_error if generations else estimate
         error_fell_enough = (
-            first_estimate <= 0.0
-            or estimate <= first_estimate / policy.required_error_reduction
+            first_estimate <= 0.0 or estimate <= first_estimate / policy.required_error_reduction
         )
         within_target = change is not None and change <= policy.target_qoi_rel_change
         streak = streak + 1 if within_target else 0
@@ -439,9 +434,7 @@ def solve_adaptive(
                 current_imbalance_fraction=conservation.imbalance_fraction,
                 power_mismatch_fraction=conservation.power_mismatch_fraction,
                 marked_elements=len(marked),
-                quantities=_quantities_of(
-                    result, qoi, problem, field_data.tri_j_vol_a_per_m2
-                ),
+                quantities=_quantities_of(result, qoi, problem, field_data.tri_j_vol_a_per_m2),
                 floor_clamped_seeds=floor_clamped,
             )
         )

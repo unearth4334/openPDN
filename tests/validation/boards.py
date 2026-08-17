@@ -404,9 +404,7 @@ def centre_contact_sheet_board(*, point_contact: bool, side_m: float = 10e-3) ->
     pad_side = 0.2e-3
     drain_width = 0.5e-3
     centre = side_m / 2.0
-    pad_b, term_b = rect_pad_terminal(
-        "b", "L1", side_m - drain_width, 0.0, drain_width, side_m
-    )
+    pad_b, term_b = rect_pad_terminal("b", "L1", side_m - drain_width, 0.0, drain_width, side_m)
     outline = (
         None
         if point_contact
