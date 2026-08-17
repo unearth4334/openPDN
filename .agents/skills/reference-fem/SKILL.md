@@ -122,8 +122,25 @@ extension of that pipeline, not a parallel one.
   is not a stopping rule. This is not theoretical: an implementation that
   stopped on QoI change plus conservation alone declared convergence on two
   non-nested meshes that happened to agree. Requiring the estimator to have
-  actually fallen, plus a confirmation count, is what tells re-meshing noise
-  apart from convergence.
+  *itself stabilised* (stopped moving pass over pass), plus a confirmation
+  count, is what tells re-meshing noise apart from convergence — asking it to
+  *halve from the coarsest pass* instead is unsatisfiable near a genuine
+  singular contribution (measured on a 392-via board: plateaued at ~55% of
+  its starting value for six passes straight while the QoI had already
+  settled to 1e-11), and stalled real convergence for no numerical reason.
+* **Conservation gates convergence at the *error* threshold, not the warning
+  one.** ADR-0010 §6 defines 1e-6 as "worth a diagnostic" and 1e-3 as "a real
+  failure" — an earlier `AdaptivePolicy` copied the warning figure as
+  `max_power_mismatch`'s hard pass/fail gate, so any board whose (still
+  perfectly healthy, still merely-flagged) power balance sat between the two
+  could never converge no matter how many passes it ran. Measured on the
+  same 392-via board: power mismatch settled at 1.0e-5 to 1.4e-5, an order
+  past the old gate but two orders inside the error threshold, and did not
+  trend toward zero under further refinement (a lumped via-barrel accounting
+  characteristic of a via-dense board, not something more mesh buys back).
+  Current imbalance measured 3e-8 to 4e-8 on the same board — nowhere near
+  either threshold — so only the power-mismatch default moved; don't loosen
+  a gate that measurement doesn't say is the blocker.
 * **Know when adaptivity is the wrong tool.** Measured: it wins big on a
   plane-neck-plane board (error in the neck, copper in the planes) and does
   *not* beat uniform refinement on a series-widths board, where total

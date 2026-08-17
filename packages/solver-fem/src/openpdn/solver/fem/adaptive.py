@@ -29,6 +29,7 @@ from openpdn.solver.fem.estimate import (
     flux_jump_indicators,
     global_error_estimate,
 )
+from openpdn.solver.fem.solver import CONSERVATION_ERROR_FRACTION
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -116,12 +117,29 @@ class AdaptivePolicy:
 
     #: Relative change in the quantity of interest that counts as converged.
     target_qoi_rel_change: float = 1e-3
-    #: The estimated error must also have fallen by this factor from the
-    #: first pass before the run may claim convergence. Without it a run can
-    #: stop purely because two successive *non-nested* meshes happened to
-    #: agree -- re-meshing noise, not error reduction (ADR-0013 §8 requires
-    #: the estimator as a separate criterion, not QoI change alone).
-    required_error_reduction: float = 2.0
+    #: How much the *global* error estimate is allowed to move, pass over
+    #: pass, before the run may claim convergence -- alongside the QoI
+    #: target, never in place of it. Reuses `target_qoi_rel_change` unless
+    #: overridden: both are asking the same question ("has this quantity
+    #: stopped moving under continued refinement"), so one user-facing knob
+    #: governs both by default.
+    #:
+    #: This replaced an earlier design requiring the estimator to *halve
+    #: from its first, coarsest pass* -- which is unsatisfiable near a
+    #: genuine singular contribution (a via annulus, a reentrant corner):
+    #: measured on a real 392-via production board, the global estimator
+    #: plateaued at ~55% of its starting value from pass 6 onward while the
+    #: QoI had settled to a relative change of 1e-11 by pass 12, and stayed
+    #: there through the full pass ceiling. Goal-oriented marking did not
+    #: change the qualitative plateau (§4's degeneracy note still applies
+    #: when it would help). A singular contribution can dominate the global
+    #: RSS estimator without the QoI being affected at all -- ADR-0013 §8's
+    #: actual requirement is evidence the mesh is trustworthy, not evidence
+    #: of an arbitrary fixed multiple of shrinkage from the coarsest pass.
+    #: Stabilisation (the estimator has itself stopped moving, whatever
+    #: value it stopped at) is the right test: it holds even when a
+    #: singular region caps how far the indicator can fall.
+    target_estimator_rel_change: float | None = None
     #: Number of consecutive passes that must meet the QoI target. One is
     #: not evidence when the mesh sequence is non-nested.
     confirmations: int = 2
@@ -141,9 +159,21 @@ class AdaptivePolicy:
     #: default: for a resistance study read at the driven terminals it is
     #: provably a no-op beyond squaring (see `dual_weighted_indicators`).
     goal_oriented: bool = False
-    #: Conservation gates, matching ADR-0010 §6's warning threshold.
+    #: Conservation gates. Current imbalance keeps ADR-0010 §6's *warning*
+    #: threshold -- measured on the real 392-via production board below,
+    #: it sat at 3e-8 to 4e-8, 25x inside even that tight gate, so there is
+    #: no measured reason to loosen it. Power mismatch reuses the *error*
+    #: threshold instead: a fraction between the two is flagged (a
+    #: diagnostic on the published result) but is not a numerical failure,
+    #: and gating convergence on the warning line made a genuinely
+    #: converged answer unreachable. On that same board, power mismatch
+    #: settled at 1.0e-5 to 1.4e-5 across all 16 passes -- an order of
+    #: magnitude past the old 1e-6 gate (copied from the warn threshold)
+    #: but two orders inside the 1e-3 error threshold -- so the run burned
+    #: its entire pass ceiling and reported RESOURCE_LIMITED despite the
+    #: QoI and estimator both having stabilised by pass 10.
     max_current_imbalance: float = 1e-6
-    max_power_mismatch: float = 1e-6
+    max_power_mismatch: float = CONSERVATION_ERROR_FRACTION
     #: Wall-clock budget in seconds, or None for no self-limit. The loop
     #: stops *itself* at a pass boundary once exceeded, keeping every
     #: completed generation -- because the alternative is the orchestrator's
@@ -167,6 +197,8 @@ class AdaptivePolicy:
             raise ValueError("Refinement ratio must exceed 1 to refine anything")
         if self.target_qoi_rel_change <= 0.0:
             raise ValueError("Target must be positive")
+        if self.target_estimator_rel_change is not None and self.target_estimator_rel_change <= 0.0:
+            raise ValueError("Estimator stabilisation target must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +294,18 @@ class AdaptiveOutcome:
     def final(self) -> Generation:
         """The last completed generation."""
         return self.generations[-1]
+
+
+def relative_change(current: float, previous: float | None) -> float | None:
+    """Fractional pass-over-pass movement of a scalar, or `None` on the first sample.
+
+    Shared by the QoI and estimator stabilisation checks -- both are the
+    same question ("has this quantity stopped moving"), asked of two
+    different quantities.
+    """
+    if previous is None or previous == 0.0:
+        return None
+    return abs(current - previous) / abs(previous)
 
 
 def terminal_resistance_qoi(result: ElectricalAnalysisResult) -> float:
@@ -396,21 +440,28 @@ def solve_adaptive(
             dual_weighted_indicators(problem, indicators) if policy.goal_oriented else indicators
         )
         qoi = quantity_of_interest(result)
-        change = (
-            None
-            if previous_qoi is None or previous_qoi == 0.0
-            else abs(qoi - previous_qoi) / abs(previous_qoi)
-        )
+        change = relative_change(qoi, previous_qoi)
         conservation = field_data.conservation
 
         estimate = global_error_estimate(indicators)
-        first_estimate = generations[0].estimated_error if generations else estimate
-        error_fell_enough = (
-            first_estimate <= 0.0 or estimate <= first_estimate / policy.required_error_reduction
+        previous_estimate = generations[-1].estimated_error if generations else None
+        estimator_target = (
+            policy.target_qoi_rel_change
+            if policy.target_estimator_rel_change is None
+            else policy.target_estimator_rel_change
+        )
+        estimator_rel_change = relative_change(estimate, previous_estimate)
+        estimator_stable = (
+            estimator_rel_change is not None and estimator_rel_change <= estimator_target
         )
         within_target = change is not None and change <= policy.target_qoi_rel_change
-        streak = streak + 1 if within_target else 0
-        settled = streak >= policy.confirmations and error_fell_enough
+        # Both must hold on the *same* pass to extend the streak: this is
+        # what makes the confirmation evidence that a fixed point has
+        # actually been reached, not just that two non-nested meshes agreed
+        # on the QoI by re-meshing accident while the mesh was still moving
+        # (ADR-0013 §8).
+        streak = streak + 1 if (within_target and estimator_stable) else 0
+        settled = streak >= policy.confirmations
         conserved = (
             conservation.imbalance_fraction <= policy.max_current_imbalance
             and conservation.power_mismatch_fraction <= policy.max_power_mismatch

@@ -195,3 +195,41 @@ an error estimator can drive.
   agree -- re-meshing noise, not error reduction. §8's estimator criterion is
   what distinguishes them, and a confirmation count was added on top: one
   quiet pass is not evidence when the mesh sequence is non-nested.
+
+## Measured (production convergence defect, 2026-08-17)
+
+A real customer job on a 392-via board (37 nets, 180 terminals, a
+16-terminal source group) reported `RESOURCE_LIMITED` after exhausting its
+full 16-pass ceiling, despite the answer having visibly settled. Two
+independent defects, both reproduced locally from the customer's own board
+document:
+
+* **§8's estimator criterion originally required the global RSS estimator to
+  halve from its first, coarsest pass -- unsatisfiable near a genuine
+  singular contribution.** A via annulus dominates the *global* estimator
+  enough that it plateaus at `~55%` of its starting value from pass 6
+  onward, while the QoI itself settled to a relative change of `1e-11` by
+  pass 12. Goal-oriented marking did not change the qualitative plateau.
+  Fixed by asking whether the estimator has *stopped moving* (pass-over-pass
+  relative change under the same target used for the QoI, by default),
+  rather than requiring an arbitrary fixed multiple of shrinkage from the
+  coarsest pass -- this holds even when a singular region caps how far the
+  indicator can fall. Regression-tested against the actual measured
+  sequence (`tests/validation/test_reference_tier.py::TestEstimatorStabilisationStoppingRule`).
+* **The conservation gate copied ADR-0010 §6's *warning* threshold (`1e-6`)
+  as `max_power_mismatch`'s hard convergence gate, rather than its *error*
+  threshold (`1e-3`).** On the same board, power mismatch settled at
+  `1.0e-5` to `1.4e-5` across all eleven passes of a corrected run -- past
+  the old gate, well inside ADR-0010's own error threshold, and not an
+  artifact refinement was going to remove (a lumped via-barrel accounting
+  characteristic of a via-dense board, not a mesh-resolution problem).
+  `max_current_imbalance` measured `3e-8` to `4e-8` on the same board, 25x
+  inside even the old gate, so it was left alone; only `max_power_mismatch`
+  moved. See ADR-0010's own Measured section for the full figures.
+
+With both fixes, the same board converges at pass 10 (11 total passes)
+instead of exhausting the 16-pass ceiling. Neither fix touches the mesher
+stall documented above (already fixed, and independently guarded: that
+defect showed a frozen mesh across seventeen generations, whereas this run's
+confirming passes each mark ~800 elements against a mesh whose DOF count is
+still genuinely moving, `floor_clamped_seeds == 0` throughout).

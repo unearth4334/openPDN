@@ -99,3 +99,27 @@ So the distributed coupling is not a refinement of the single-node model, it
 is the difference between a converging quantity and a diverging one, and
 `numerics.point_source_singularity` marks a result whose value has no
 continuum limit -- one that gets *worse* under refinement, not better.
+
+## Measured (Reference-tier conservation gate, 2026-08-17)
+
+Decision §6 fixed 1e-6 as the warning threshold and 1e-3 as the error
+threshold for both conservation figures -- a fraction between the two is
+flagged but is not a numerical failure. `AdaptivePolicy` (ADR-0013), which
+gates *convergence itself* rather than just a diagnostic, had copied the
+1e-6 warning figure as `max_power_mismatch`'s hard pass/fail default instead.
+
+Measured on a real 392-via production board (37 nets, 180 terminals, a
+16-terminal source group): power mismatch settled at 1.0e-5 to 1.4e-5 across
+all eleven passes of its adaptive run -- an order of magnitude past that
+default, comfortably inside this ADR's own error threshold, and never
+trending toward zero (an artifact of the lumped via-barrel model on a
+via-dense board, not a mesh-resolution problem refinement would fix). The
+job exhausted its full 16-pass ceiling reporting `RESOURCE_LIMITED` despite
+the quantity of interest and the error estimator both having stabilised by
+pass 10. `AdaptivePolicy.max_power_mismatch` now defaults to this ADR's
+error threshold instead of its warning one; the published result still
+carries the `numerics.power_mismatch` warning diagnostic either way, so the
+figure remains visible even once it stops blocking convergence.
+`max_current_imbalance` was left at the warning threshold: the same board
+measured 3e-8 to 4e-8 there, 25x inside even that tighter gate, so nothing
+observed justified loosening it too.

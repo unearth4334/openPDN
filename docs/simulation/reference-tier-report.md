@@ -48,12 +48,41 @@ earns its extra solve only when the functional and excitation differ.
 
 ## Convergence targets and stopping
 
-Stopping is a conjunction: QoI relative change within target for
-`confirmations` consecutive passes **and** the estimator fallen by
-`required_error_reduction` from the first pass **and** current and energy
-conservation within 1e-6. The estimator criterion is not decorative: a first
-implementation stopping on QoI change alone declared convergence on two
-non-nested meshes that happened to agree.
+Stopping is a conjunction: QoI relative change within target **and** the
+global error estimate itself stabilised (its own pass-over-pass relative
+change within target) for `confirmations` consecutive passes **and**
+current imbalance within 1e-6 and power mismatch within 1e-3 (ADR-0010 §6's
+error threshold, not its warning one). The estimator criterion is not
+decorative: a first implementation stopping on QoI change alone declared
+convergence on two non-nested meshes that happened to agree.
+
+Both the estimator criterion and the power-mismatch gate were redesigned on
+the same real production job (a 392-via board, 37 nets, 180 terminals, a
+16-terminal source group) that reported `RESOURCE_LIMITED` after exhausting
+its full 16-pass ceiling despite the answer having visibly settled.
+
+The estimator criterion originally required the estimator to *halve from its
+first, coarsest pass* -- on that board the global estimator plateaued at
+~55% of its starting value from pass 6 onward (goal-oriented marking did not
+change this) while the QoI had settled to a relative change of 1e-11 by pass
+12. A singular contribution (a via annulus, a reentrant corner) can dominate
+the global RSS estimator and cap how far it falls without the QoI being
+affected at all. The estimator criterion now asks whether the estimator has
+*itself stopped moving*, not whether it fell by an arbitrary multiple --
+true whether or not a singular region bounds it above the old target.
+
+The power-mismatch gate originally reused ADR-0010 §6's *warning* threshold
+(1e-6) as a hard convergence requirement rather than its *error* threshold
+(1e-3). On the same board power mismatch settled at 1.0e-5 to 1.4e-5 across
+all eleven passes of a corrected run -- past the old gate, well inside the
+error threshold, and not something further refinement was going to remove
+(a lumped via-barrel accounting characteristic of a via-dense board). The
+published result still carries the `numerics.power_mismatch` warning
+diagnostic either way; only the hard gate moved. Current imbalance stayed at
+the tighter warning threshold: the same board measured 3e-8 to 4e-8 there,
+25x inside even that gate, so nothing observed justified loosening it too.
+With both fixes the board converges at pass 10 (11 total passes) instead of
+exhausting the 16-pass ceiling.
 
 Per-quantity verdicts: resistance, total loss and J99 converge; sampled peak
 |J| is tagged singular, reported, and never converged on — its failure to
@@ -129,8 +158,10 @@ resistance, fields, power and conservation across every size checked.
 ## Current imbalance / energy imbalance
 
 Direct solves: ~1e-13 to 1e-10 across the suite; 8.5e-8 at 2.28M DOFs.
-Warning threshold 1e-6, error 1e-3 (ADR-0010 §6), unchanged and enforced at
-every adaptive generation.
+Warning threshold 1e-6, error 1e-3 (ADR-0010 §6): both are reported as
+diagnostics at every adaptive generation as before, but only current
+imbalance is *gated* at the warning line — power mismatch gates at the error
+line instead, per the production finding above.
 
 ## Sub-tiers
 
