@@ -37,6 +37,7 @@ from openpdn.application.errors import BoardNotFoundError
 from openpdn.application.simulation_models import (
     AccuracyProfile,
     JobRecord,
+    LayerThicknessOverrideSpec,
     LoadSpec,
     ReferencePolicy,
     ReferenceTier,
@@ -44,6 +45,7 @@ from openpdn.application.simulation_models import (
     SimulationKind,
     SimulationRequestError,
 )
+from openpdn.domain.materials import COPPER_ANNEALED
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -60,6 +62,13 @@ class LoadRequest(BaseModel):
     terminal_ids: list[str] = Field(default_factory=list, max_length=256)
     via_ids: list[str] = Field(default_factory=list, max_length=256)
     current_a: float = Field(gt=0.0, allow_inf_nan=False)
+
+
+class ThicknessOverrideRequest(BaseModel):
+    """A study-supplied copper thickness for one stack-up layer."""
+
+    layer_id: str = Field(min_length=1, max_length=256)
+    thickness_um: float = Field(gt=0.0, lt=1000.0)
 
 
 class ReferencePolicyRequest(BaseModel):
@@ -138,10 +147,30 @@ class SimulationDraftRequest(BaseModel):
     to_terminal_ids: list[str] = Field(default_factory=list, max_length=256)
     to_via_ids: list[str] = Field(default_factory=list, max_length=256)
     via_plating_um: float | None = Field(default=None, gt=0.0, lt=1000.0)
+    conductor_material: Literal["copper_annealed", "custom"] | None = None
+    conductor_conductivity_s_per_m: float | None = Field(default=None, gt=0.0)
+    thickness_overrides: list[ThicknessOverrideRequest] = Field(default_factory=list, max_length=64)
     reference: ReferencePolicyRequest | None = None
 
     def to_draft(self, board_id: str) -> SimulationDraft:
-        """Convert to the application draft (validating shape invariants)."""
+        """Convert to the application draft (validating shape invariants).
+
+        `conductor_material` names a preset; like a Reference tier, it
+        resolves to plain numbers here and is then forgotten -- the draft and
+        the job spec it becomes never store which preset was picked.
+        """
+        conductivity: float | None = None
+        material_name: str | None = None
+        if self.conductor_material == "custom":
+            if self.conductor_conductivity_s_per_m is None:
+                raise SimulationRequestError("Custom conductor material needs a conductivity value")
+            conductivity, material_name = self.conductor_conductivity_s_per_m, "Custom"
+        elif self.conductor_material == "copper_annealed":
+            if self.conductor_conductivity_s_per_m is not None:
+                raise SimulationRequestError(
+                    "Copper (annealed) is a fixed material and cannot carry a custom conductivity"
+                )
+            conductivity, material_name = COPPER_ANNEALED.conductivity_s_per_m, COPPER_ANNEALED.name
         return SimulationDraft(
             kind=SimulationKind(self.kind),
             board_id=board_id,
@@ -162,6 +191,14 @@ class SimulationDraftRequest(BaseModel):
             to_terminal_ids=tuple(self.to_terminal_ids),
             to_via_ids=tuple(self.to_via_ids),
             via_plating_m=None if self.via_plating_um is None else self.via_plating_um * 1e-6,
+            conductor_conductivity_s_per_m=conductivity,
+            conductor_material_name=material_name,
+            thickness_overrides=tuple(
+                LayerThicknessOverrideSpec(
+                    layer_id=override.layer_id, thickness_m=override.thickness_um * 1e-6
+                )
+                for override in self.thickness_overrides
+            ),
             reference_policy=None if self.reference is None else self.reference.to_policy(),
         )
 

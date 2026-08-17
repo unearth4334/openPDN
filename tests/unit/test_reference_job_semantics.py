@@ -209,7 +209,7 @@ class TestSpecPersistence:
         assert reloaded.accuracy is AccuracyProfile.REFERENCE
 
     def test_the_schema_version_advanced(self):
-        assert json.loads(_spec().to_json())["schema"] == 3
+        assert json.loads(_spec().to_json())["schema"] == 4
 
     def test_a_schema_two_row_loads_without_a_policy(self):
         # Rows queued before the tier existed were queued against a fixed

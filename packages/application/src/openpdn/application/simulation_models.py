@@ -167,6 +167,21 @@ class LoadSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class LayerThicknessOverrideSpec:
+    """A study-supplied copper thickness for one stack-up layer, in metres."""
+
+    layer_id: str
+    thickness_m: float
+
+    def __post_init__(self) -> None:
+        """Reject non-physical thicknesses (untrusted input)."""
+        if not math.isfinite(self.thickness_m) or not 0.0 < self.thickness_m < 1e-3:
+            raise SimulationRequestError(
+                "Layer thickness override must be a positive thickness below 1 mm"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedMeshSpec:
     """Mesh sizing resolved from an accuracy profile, frozen into the spec.
 
@@ -213,6 +228,16 @@ class SimulationDraft:
     to_terminal_ids: tuple[str, ...] = ()
     to_via_ids: tuple[str, ...] = ()
     via_plating_m: float | None = None
+    #: Conductor conductivity for the whole study, S/m; `None` keeps each
+    #: layer's imported material. Never a preset name -- the preset is
+    #: resolved to this plain number (and forgotten) before the draft exists.
+    conductor_conductivity_s_per_m: float | None = None
+    #: Display/audit label for the conductivity above; carries no numerical
+    #: effect and is not hashed into `analysis_signature`.
+    conductor_material_name: str | None = None
+    #: Per-layer copper thickness overrides. The board records what was
+    #: imported; this records what the engineer decided (ADR-0002).
+    thickness_overrides: tuple[LayerThicknessOverrideSpec, ...] = ()
     #: Adaptive policy, required by the Reference profile and rejected by
     #: every other one -- a fixed-mesh profile has nothing to adapt.
     reference_policy: ReferencePolicy | None = None
@@ -229,6 +254,14 @@ class SimulationDraft:
             raise SimulationRequestError(
                 "Via plating assumption must be a positive thickness below 1 mm"
             )
+        if self.conductor_conductivity_s_per_m is not None and not (
+            math.isfinite(self.conductor_conductivity_s_per_m)
+            and self.conductor_conductivity_s_per_m > 0.0
+        ):
+            raise SimulationRequestError("Conductor conductivity must be a finite positive number")
+        layer_ids = [override.layer_id for override in self.thickness_overrides]
+        if len(set(layer_ids)) != len(layer_ids):
+            raise SimulationRequestError("Thickness override given twice for the same layer")
         if self.kind is SimulationKind.RESISTANCE:
             # A resistance probe reports R between exactly two terminals
             # (ADR-0010) -- it has no group or via-endpoint form. Accepting
@@ -433,11 +466,18 @@ class SimulationJobSpec:
     #: since the achieved size is not knowable in advance and admission must
     #: reason about the worst case it agreed to allow.
     estimated_dofs: int = 0
+    #: Conductor conductivity for the whole study, S/m; `None` keeps each
+    #: layer's imported material.
+    conductor_conductivity_s_per_m: float | None = None
+    #: Display/audit label only -- not hashed into the signature.
+    conductor_material_name: str | None = None
+    #: Per-layer copper thickness overrides.
+    thickness_overrides: tuple[LayerThicknessOverrideSpec, ...] = ()
 
     def to_json(self) -> str:
         """Serialise for durable storage."""
         payload: dict[str, Any] = {
-            "schema": 3,
+            "schema": 4,
             "job_id": self.job_id,
             "name": self.name,
             "kind": self.kind.value,
@@ -472,6 +512,12 @@ class SimulationJobSpec:
             },
             "verify_convergence": self.verify_convergence,
             "via_plating_m": self.via_plating_m,
+            "conductor_conductivity_s_per_m": self.conductor_conductivity_s_per_m,
+            "conductor_material_name": self.conductor_material_name,
+            "thickness_overrides": [
+                {"layer_id": o.layer_id, "thickness_m": o.thickness_m}
+                for o in self.thickness_overrides
+            ],
             "solver_name": self.solver_name,
             "created_at_epoch_s": self.created_at_epoch_s,
             "signature": self.signature,
@@ -491,6 +537,12 @@ class SimulationJobSpec:
         policy; they load with `reference_policy=None`, which is exactly
         right -- they were queued against a fixed mesh and must re-run that
         way.
+
+        Schema 3 rows predate conductor overrides; they load with
+        `conductor_conductivity_s_per_m=None`, `conductor_material_name=None`
+        and `thickness_overrides=()`, which is exactly right -- they were
+        queued against each layer's imported material and thickness and must
+        re-run that way.
         """
         data = json.loads(raw)
         source_terminal_ids = _upgrade_ids(data, "source_terminal_ids", "source_terminal_id")
@@ -532,6 +584,14 @@ class SimulationJobSpec:
             ),
             verify_convergence=data["verify_convergence"],
             via_plating_m=data["via_plating_m"],
+            conductor_conductivity_s_per_m=data.get("conductor_conductivity_s_per_m"),
+            conductor_material_name=data.get("conductor_material_name"),
+            thickness_overrides=tuple(
+                LayerThicknessOverrideSpec(
+                    layer_id=item["layer_id"], thickness_m=item["thickness_m"]
+                )
+                for item in data.get("thickness_overrides") or ()
+            ),
             solver_name=data["solver_name"],
             created_at_epoch_s=data["created_at_epoch_s"],
             signature=data["signature"],
@@ -564,6 +624,8 @@ def analysis_signature(
     solver_name: str,
     solver_version: str,
     reference_policy: ReferencePolicy | None = None,
+    conductor_conductivity_s_per_m: float | None = None,
+    thickness_overrides: tuple[LayerThicknessOverrideSpec, ...] = (),
 ) -> str:
     """Deterministic hash over every solver-affecting input.
 
@@ -603,6 +665,8 @@ def analysis_signature(
             ],
             "verify": verify_convergence,
             "plating": via_plating_m,
+            "conductivity": conductor_conductivity_s_per_m,
+            "thickness_overrides": sorted((o.layer_id, o.thickness_m) for o in thickness_overrides),
             "reference_policy": (
                 None if reference_policy is None else reference_policy.to_payload()
             ),

@@ -164,6 +164,8 @@ class SimulationService:
             solver_name=self._solver_name,
             solver_version=self._solver_version,
             reference_policy=draft.reference_policy,
+            conductor_conductivity_s_per_m=draft.conductor_conductivity_s_per_m,
+            thickness_overrides=draft.thickness_overrides,
         )
         now = self._clock()
         nets_by_id = {str(net.id): net for net in board.nets}
@@ -186,6 +188,9 @@ class SimulationService:
             mesh=mesh,
             verify_convergence=verify,
             via_plating_m=draft.via_plating_m,
+            conductor_conductivity_s_per_m=draft.conductor_conductivity_s_per_m,
+            conductor_material_name=draft.conductor_material_name,
+            thickness_overrides=draft.thickness_overrides,
             solver_name=self._solver_name,
             created_at_epoch_s=now,
             signature=signature,
@@ -346,6 +351,16 @@ class SimulationService:
                 raise SimulationRequestError(
                     f"Via {via_id!r} sits on net {via.net_id!r}, "
                     f"not on the studied net {draft.net_id!r}"
+                )
+        conductive_layer_ids = {str(layer.id) for layer in board.stackup.conductive_layers}
+        known_layer_ids = {str(layer.id) for layer in board.stackup.layers}
+        for override in draft.thickness_overrides:
+            if override.layer_id not in known_layer_ids:
+                raise SimulationRequestError(f"Unknown layer {override.layer_id!r}")
+            if override.layer_id not in conductive_layer_ids:
+                raise SimulationRequestError(
+                    f"Layer {override.layer_id!r} is not conductive; thickness overrides "
+                    "apply to copper layers only"
                 )
 
 

@@ -31,8 +31,10 @@ import type {
   SimulationDraftRequest,
   SimulationKind,
   TerminalResponse,
+  ThicknessOverrideRequest,
   ViaResponse,
 } from "../api/types";
+import { formatUm } from "../lib/units";
 import { useBoardState } from "../state/boardState";
 
 /**
@@ -86,6 +88,12 @@ export function SimulationPanel() {
   const [refMaxDofs, setRefMaxDofs] = useState(REFERENCE_TIERS.medium.maxDofs);
   const [refElementOrder, setRefElementOrder] = useState<"p1" | "p2">("p2");
   const [viaPlatingUm, setViaPlatingUm] = useState("25");
+  // "" means unset -- as imported, per layer. Must not default to
+  // "copper_annealed", or every fresh draft would silently override every
+  // layer's real material.
+  const [conductorMaterial, setConductorMaterial] = useState<"" | "copper_annealed" | "custom">("");
+  const [customConductivity, setCustomConductivity] = useState("");
+  const [thicknessOverrides, setThicknessOverrides] = useState<Record<string, string>>({});
   const [estimate, setEstimate] = useState<EstimateResponse | null>(null);
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
@@ -156,6 +164,8 @@ export function SimulationPanel() {
         to_terminal_ids: [toId],
         accuracy,
         via_plating_um: numberOrNull(viaPlatingUm),
+        ...conductorMaterialFields(conductorMaterial, customConductivity),
+        thickness_overrides: thicknessOverridePayload(thicknessOverrides),
         reference: referencePolicy(
           accuracy,
           refTargetPct,
@@ -185,6 +195,8 @@ export function SimulationPanel() {
       loads: parsedLoads,
       accuracy,
       via_plating_um: numberOrNull(viaPlatingUm),
+      ...conductorMaterialFields(conductorMaterial, customConductivity),
+      thickness_overrides: thicknessOverridePayload(thicknessOverrides),
       reference: referencePolicy(accuracy, refTargetPct, refMaxPasses, refMaxDofs, refElementOrder),
     };
   }, [
@@ -197,6 +209,9 @@ export function SimulationPanel() {
     loads,
     accuracy,
     viaPlatingUm,
+    conductorMaterial,
+    customConductivity,
+    thicknessOverrides,
     refTargetPct,
     refMaxPasses,
     refMaxDofs,
@@ -571,6 +586,74 @@ export function SimulationPanel() {
                 Used only for vias whose fabrication data omits plating; recorded as an assumption
                 in the result.
               </p>
+
+              <label className="sim-field">
+                <span className="sim-field__label">Conductor material</span>
+                <select
+                  value={conductorMaterial}
+                  onChange={(event) =>
+                    setConductorMaterial(event.target.value as typeof conductorMaterial)
+                  }
+                >
+                  <option value="">As imported (per layer)</option>
+                  <option value="copper_annealed">Copper (annealed, 100 % IACS)</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              {conductorMaterial === "custom" ? (
+                <label className="sim-field">
+                  <span className="sim-field__label">Conductivity</span>
+                  <span className="sim-field__unit-row">
+                    <input
+                      type="number"
+                      step="1e6"
+                      min="0"
+                      value={customConductivity}
+                      aria-label="Custom conductor conductivity in siemens per metre"
+                      onChange={(event) => setCustomConductivity(event.target.value)}
+                    />
+                    <span className="sim-field__unit">S/m</span>
+                  </span>
+                </label>
+              ) : null}
+              <p className="sim-note">
+                Applies to every conductive layer in the study. 100 % IACS copper is 5.8001e7 S/m.
+              </p>
+
+              {review?.layers.some((l) => l.is_conductive) ? (
+                <div className="sim-field">
+                  <span className="sim-field__label">Layer thickness overrides</span>
+                  {review.layers
+                    .filter((l) => l.is_conductive)
+                    .map((layer) => (
+                      <label key={layer.id} className="sim-field sim-field--row">
+                        <span className="sim-field__label">
+                          {layer.name}
+                          {layer.thickness
+                            ? ` (imported: ${formatUm(layer.thickness.value)})`
+                            : " (unknown)"}
+                        </span>
+                        <span className="sim-field__unit-row">
+                          <input
+                            type="number"
+                            step="1"
+                            min="1"
+                            value={thicknessOverrides[layer.id] ?? ""}
+                            aria-label={`Copper thickness override for ${layer.name} in micrometres`}
+                            onChange={(event) =>
+                              setThicknessOverrides((rows) => ({
+                                ...rows,
+                                [layer.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <span className="sim-field__unit">µm</span>
+                        </span>
+                      </label>
+                    ))}
+                  <p className="sim-note">Leave blank to use the layer's imported thickness.</p>
+                </div>
+              ) : null}
             </details>
 
             {queueError ? <p className="sim-error">{queueError}</p> : null}
@@ -622,6 +705,31 @@ function addUnique(ids: string[], id: string): string[] {
 function numberOrNull(text: string): number | null {
   const value = Number(text);
   return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Conductor material fields for the draft, resolved from the preset selection. */
+function conductorMaterialFields(
+  material: "" | "copper_annealed" | "custom",
+  conductivity: string,
+): Pick<SimulationDraftRequest, "conductor_material" | "conductor_conductivity_s_per_m"> {
+  if (material === "") {
+    return { conductor_material: null, conductor_conductivity_s_per_m: null };
+  }
+  if (material === "copper_annealed") {
+    return { conductor_material: "copper_annealed", conductor_conductivity_s_per_m: null };
+  }
+  return {
+    conductor_material: "custom",
+    conductor_conductivity_s_per_m: numberOrNull(conductivity),
+  };
+}
+
+/** Per-layer thickness overrides for the draft; blank entries are left out. */
+function thicknessOverridePayload(overrides: Record<string, string>): ThicknessOverrideRequest[] {
+  return Object.entries(overrides).flatMap(([layer_id, text]) => {
+    const thickness_um = numberOrNull(text);
+    return thickness_um === null ? [] : [{ layer_id, thickness_um }];
+  });
 }
 
 function EstimateSummary({

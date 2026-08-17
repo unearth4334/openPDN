@@ -18,6 +18,7 @@ import numpy as np
 
 from openpdn.application.simulation_models import (
     AccuracyProfile,
+    LayerThicknessOverrideSpec,
     LoadSpec,
     ReferencePolicy,
     ReferenceTier,
@@ -25,6 +26,7 @@ from openpdn.application.simulation_models import (
     SimulationKind,
     SimulationRequestError,
 )
+from openpdn.domain.materials import COPPER_ANNEALED
 
 if TYPE_CHECKING:
     import argparse
@@ -103,6 +105,32 @@ def register(subparsers: Any) -> None:
                 "type": float,
                 "default": None,
                 "help": "Assumed via plating thickness in micrometres, when unknown.",
+            },
+        ),
+        (
+            "--conductor-material",
+            {
+                "choices": ["copper-annealed", "custom"],
+                "default": None,
+                "help": "Conductor material for the whole study; default keeps each "
+                "layer's imported material.",
+            },
+        ),
+        (
+            "--conductivity-s-per-m",
+            {
+                "type": float,
+                "default": None,
+                "help": "Custom conductor material only: conductivity in S/m.",
+            },
+        ),
+        (
+            "--layer-thickness",
+            {
+                "action": "append",
+                "default": [],
+                "metavar": "LAYER=MICROMETRES",
+                "help": "Copper thickness override for one layer; repeatable.",
             },
         ),
         (
@@ -202,6 +230,21 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
         if args.accuracy == AccuracyProfile.REFERENCE.value
         else None
     )
+    conductivity, material_name = None, None
+    if args.conductor_material == "copper-annealed":
+        conductivity, material_name = COPPER_ANNEALED.conductivity_s_per_m, COPPER_ANNEALED.name
+    elif args.conductor_material == "custom":
+        if args.conductivity_s_per_m is None:
+            raise SimulationRequestError("--conductor-material custom needs --conductivity-s-per-m")
+        conductivity, material_name = args.conductivity_s_per_m, "Custom"
+    thickness_overrides = []
+    for item in args.layer_thickness:
+        layer, _, um = item.partition("=")
+        if not um:
+            raise SimulationRequestError(f"Layer thickness {item!r} is not LAYER=MICROMETRES")
+        thickness_overrides.append(
+            LayerThicknessOverrideSpec(layer_id=layer, thickness_m=float(um) * 1e-6)
+        )
 
     if args.simulate_kind == "resistance":
         draft = SimulationDraft(
@@ -212,6 +255,9 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
             to_terminal_ids=(_resolve_terminal(board, args.to_terminal, net_id),),
             accuracy=AccuracyProfile(args.accuracy),
             via_plating_m=plating_m,
+            conductor_conductivity_s_per_m=conductivity,
+            conductor_material_name=material_name,
+            thickness_overrides=tuple(thickness_overrides),
             reference_policy=reference_policy,
         )
     else:
@@ -235,6 +281,9 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
             loads=tuple(loads),
             accuracy=AccuracyProfile(args.accuracy),
             via_plating_m=plating_m,
+            conductor_conductivity_s_per_m=conductivity,
+            conductor_material_name=material_name,
+            thickness_overrides=tuple(thickness_overrides),
             reference_policy=reference_policy,
         )
 

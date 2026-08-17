@@ -306,6 +306,11 @@ export interface SimulationLoadRequest {
   current_a: number;
 }
 
+export interface ThicknessOverrideRequest {
+  layer_id: string;
+  thickness_um: number;
+}
+
 export interface SimulationDraftRequest {
   kind: SimulationKind;
   net_id: string;
@@ -318,6 +323,9 @@ export interface SimulationDraftRequest {
   to_terminal_ids?: string[];
   to_via_ids?: string[];
   via_plating_um?: number | null;
+  conductor_material?: "copper_annealed" | "custom" | null;
+  conductor_conductivity_s_per_m?: number | null;
+  thickness_overrides?: ThicknessOverrideRequest[];
   reference?: ReferencePolicyRequest | null;
 }
 

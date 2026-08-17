@@ -33,12 +33,14 @@ from openpdn.application.simulation_models import (
     SimulationKind,
 )
 from openpdn.application.version import get_version
+from openpdn.domain.materials import Material
 from openpdn.domain.provenance import Quantity
 from openpdn.domain.results import DiagnosticSeverity
 from openpdn.domain.study import (
     AnalysisStudy,
     AttachmentGroup,
     CurrentLoad,
+    LayerThicknessOverride,
     LoadId,
     MeshSettings,
     ProbeId,
@@ -66,7 +68,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from openpdn.application.simulation_ports import JobStore, SimulationArtifactStore
-    from openpdn.domain.board import Board, NetId, TerminalId
+    from openpdn.domain.board import Board, LayerId, NetId, TerminalId
     from openpdn.domain.results import ElectricalAnalysisResult
     from openpdn.geometry.api import GeometryNormalizer
 
@@ -586,6 +588,26 @@ def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float
         if spec.via_plating_m is not None
         else None
     )
+    # No temperature coefficient: a deliberate no-op today, since this
+    # function never sets `study.temperature=`. Worth revisiting if
+    # temperature correction is wired up later -- a study-level material
+    # override would then silently stop temperature-correcting, unlike the
+    # board's own per-layer material.
+    conductor_material = (
+        Material(
+            name=spec.conductor_material_name or "Custom",
+            conductivity_s_per_m=spec.conductor_conductivity_s_per_m,
+        )
+        if spec.conductor_conductivity_s_per_m is not None
+        else None
+    )
+    thickness_overrides = tuple(
+        LayerThicknessOverride(
+            layer_id=_layer(override.layer_id),
+            thickness=Quantity.configured(override.thickness_m, METRE),
+        )
+        for override in spec.thickness_overrides
+    )
     suffix = "" if refine_factor == 1.0 else "-fine"
     return AnalysisStudy(
         id=StudyId(f"{spec.job_id}{suffix}"),
@@ -597,6 +619,8 @@ def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float
         probes=probes,
         mesh=mesh,
         via_plating_thickness=plating,
+        conductor_material=conductor_material,
+        thickness_overrides=thickness_overrides,
     )
 
 
@@ -620,6 +644,12 @@ def _net(value: str) -> NetId:
     from openpdn.domain.board import NetId as RealNetId
 
     return RealNetId(value)
+
+
+def _layer(value: str) -> LayerId:
+    from openpdn.domain.board import LayerId as RealLayerId
+
+    return RealLayerId(value)
 
 
 def _engineering_quantities(

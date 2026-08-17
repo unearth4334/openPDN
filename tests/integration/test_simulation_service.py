@@ -14,6 +14,7 @@ request.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 
 import pytest
@@ -21,6 +22,7 @@ import pytest
 from openpdn.application.board_store import StoredBoard
 from openpdn.application.simulation_models import (
     AccuracyProfile,
+    LayerThicknessOverrideSpec,
     LoadSpec,
     ReferencePolicy,
     ReferenceTier,
@@ -30,13 +32,14 @@ from openpdn.application.simulation_models import (
     WorkerLimits,
 )
 from openpdn.application.simulation_service import SimulationService
+from openpdn.domain.board import Stackup
 from openpdn.geometry.shapely_engine import ShapelyGeometryNormalizer
 from openpdn.infrastructure.board_store import InMemoryBoardStore
 from openpdn.infrastructure.fem_planner import FemSimulationPlanner
 from openpdn.infrastructure.job_store_sqlite import SqliteJobStore
 from openpdn.infrastructure.simulation_artifacts import FilesystemArtifactStore
 from openpdn.pcb_import.api import ImportResult
-from tests.validation.boards import NET, plane_neck_plane_board
+from tests.validation.boards import NET, dielectric_layer, plane_neck_plane_board
 
 _BOARD_ID = "board-under-test"
 
@@ -44,6 +47,12 @@ _BOARD_ID = "board-under-test"
 @pytest.fixture
 def service(tmp_path):
     board = plane_neck_plane_board()
+    # A dielectric layer, unused by any region, purely so the
+    # not-conductive thickness-override refusal has something real to
+    # refuse against.
+    board = dataclasses.replace(
+        board, stackup=Stackup((*board.stackup.layers, dielectric_layer("L-diel", 1)))
+    )
     normalizer = ShapelyGeometryNormalizer()
     boards = InMemoryBoardStore()
     boards.put(
@@ -169,6 +178,54 @@ class TestServerSideRefusals:
     def test_a_fixed_mesh_profile_carrying_a_policy_is_refused(self, service):
         with pytest.raises(SimulationRequestError, match="cannot carry an adaptive policy"):
             service.plan(_draft(AccuracyProfile.STANDARD, reference_policy=ReferencePolicy()))
+
+
+class TestConductorOverrides:
+    def test_an_unknown_layer_override_is_refused(self, service):
+        with pytest.raises(SimulationRequestError, match="Unknown layer"):
+            service.plan(
+                _draft(
+                    AccuracyProfile.STANDARD,
+                    thickness_overrides=(
+                        LayerThicknessOverrideSpec(layer_id="no-such-layer", thickness_m=3.5e-5),
+                    ),
+                )
+            )
+
+    def test_a_non_conductive_layer_override_is_refused(self, service):
+        with pytest.raises(SimulationRequestError, match="is not conductive"):
+            service.plan(
+                _draft(
+                    AccuracyProfile.STANDARD,
+                    thickness_overrides=(
+                        LayerThicknessOverrideSpec(layer_id="L-diel", thickness_m=3.5e-5),
+                    ),
+                )
+            )
+
+    def test_a_conductive_layer_override_is_carried_into_the_spec(self, service):
+        overrides = (LayerThicknessOverrideSpec(layer_id="L1", thickness_m=3.5e-5),)
+        plan = service.plan(_draft(AccuracyProfile.STANDARD, thickness_overrides=overrides))
+        assert plan.resolved_spec.thickness_overrides == overrides
+
+    def test_conductor_conductivity_and_material_name_are_carried_into_the_spec(self, service):
+        plan = service.plan(
+            _draft(
+                AccuracyProfile.STANDARD,
+                conductor_conductivity_s_per_m=4.5e7,
+                conductor_material_name="Custom",
+            )
+        )
+        spec = plan.resolved_spec
+        assert spec.conductor_conductivity_s_per_m == 4.5e7
+        assert spec.conductor_material_name == "Custom"
+
+    def test_conductivity_changes_the_signature(self, service):
+        first = service.plan(_draft(AccuracyProfile.STANDARD)).resolved_spec.signature
+        second = service.plan(
+            _draft(AccuracyProfile.STANDARD, conductor_conductivity_s_per_m=4.5e7)
+        ).resolved_spec.signature
+        assert first != second
 
 
 class TestTierThroughTheApi:
