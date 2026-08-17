@@ -34,15 +34,20 @@ if TYPE_CHECKING:
 #:
 #: A single number therefore over-estimates small problems and *under*-
 #: estimates large ones, which is the dangerous direction: a budget refusal
-#: exists to stop a job that will not fit. This value is raised to cover the
-#: top of the measured range with headroom rather than sitting mid-curve, so
-#: the estimate errs towards refusing a job that would have fit rather than
-#: admitting one that will not.
+#: exists to stop a job that will not fit.
+#:
+#: A second, larger measurement re-set this value: a 2,279,489-DOF P2 solve
+#: of the same board peaked at 11.25 GiB of process RSS -- about 5,300
+#: bytes per DOF. Peak RSS is the honest basis, not factor storage alone,
+#: because peak RSS is what the OOM killer acts on, and it includes the
+#: meshing and assembly transients the L+U figure ignores. The value below
+#: sits at that measurement; jobs whose estimate exceeds the worker budget
+#: on this basis are deferred or started alone rather than beside others.
 #:
 #: The iterative backend (ADR-0014) has no factorisation and its memory is
 #: roughly flat in DOFs, so this over-states it considerably -- which is
-#: safe, and is why `AUTO` switching to iterative buys headroom.
-BYTES_PER_DOF: Final = 2400
+#: safe, and is why an explicit `iterative` choice buys memory headroom.
+BYTES_PER_DOF: Final = 5000
 
 #: A planar Delaunay triangulation of n points has about 2n triangles.
 TRIANGLES_PER_POINT: Final = 2.0

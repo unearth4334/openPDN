@@ -50,6 +50,9 @@ class AdaptiveStatus:
     CONVERGED_WITH_MODEL_LIMITATIONS = "converged_with_model_limitations"
     RESOURCE_LIMITED = "resource_limited"
     NOT_CONVERGED = "not_converged"
+    #: The run was asked to stop (cancellation) and kept what it had. The
+    #: partial answer is inspectable but never presents as converged.
+    CANCELLED_PARTIAL = "cancelled_partial"
 
 
 #: Quantities tracked across generations. `singular` marks those with no
@@ -138,6 +141,11 @@ class AdaptivePolicy:
     #: Conservation gates, matching ADR-0010 §6's warning threshold.
     max_current_imbalance: float = 1e-6
     max_power_mismatch: float = 1e-6
+    #: Wall-clock budget in seconds, or None for no self-limit. The loop
+    #: stops *itself* at a pass boundary once exceeded, keeping every
+    #: completed generation -- because the alternative is the orchestrator's
+    #: hard timeout, which SIGKILLs the process and keeps nothing.
+    max_seconds: float | None = None
 
     def __post_init__(self) -> None:
         """Reject policies that could never terminate or never refine."""
@@ -182,6 +190,23 @@ class QuantityConvergence:
     singular: bool
     extrapolated: float | None = None
     observed_order: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveResume:
+    """State a previous execution checkpointed at a pass boundary.
+
+    Deliberately tiny: because re-meshing is deterministic from board, study
+    and refinement field (ADR-0013 §9), a resume needs no mesh and no
+    solution -- only the completed generations' metrics, the sizing-field
+    seeds the next pass would have used, and the convergence streak. The
+    next pass then re-derives everything else exactly as the original
+    execution would have.
+    """
+
+    generations: tuple[Generation, ...]
+    field: RefinementField | None
+    streak: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +331,9 @@ def solve_adaptive(
     normalizer: GeometryNormalizer,
     policy: AdaptivePolicy | None = None,
     quantity_of_interest: Callable[[ElectricalAnalysisResult], float] = terminal_resistance_qoi,
+    resume: AdaptiveResume | None = None,
+    on_generation: Callable[[AdaptiveResume], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> AdaptiveOutcome:
     """Run the refinement loop until convergence or a stated limit.
 
@@ -314,19 +342,30 @@ def solve_adaptive(
     exhausts its pass or DOF ceiling while the answer is still moving is
     reported RESOURCE_LIMITED -- it has not converged, and must never present
     as though it had.
+
+    `on_generation` fires at every pass boundary with exactly the state a
+    later execution needs to continue via `resume`; `should_stop` is polled
+    at the same boundaries and ends the run as CANCELLED_PARTIAL, keeping
+    what exists. Both exist for the worker's checkpoint/cancel plumbing and
+    change nothing about the numerics.
     """
+    import time as _time
+
     from openpdn.solver.fem.solver import solve_with_controls
 
     policy = policy or AdaptivePolicy()
     normalized = normalizer.normalize(board)
-    field: RefinementField | None = None
-    generations: list[Generation] = []
-    previous_qoi: float | None = None
-    streak = 0
+    field: RefinementField | None = resume.field if resume is not None else None
+    generations: list[Generation] = list(resume.generations) if resume is not None else []
+    previous_qoi: float | None = (
+        generations[-1].quantity_of_interest if generations else None
+    )
+    streak = resume.streak if resume is not None else 0
     result = None
     status = AdaptiveStatus.NOT_CONVERGED
+    started_at = _time.monotonic()
 
-    for index in range(policy.max_passes):
+    for index in range(len(generations), policy.max_passes):
         result, field_data, problem, node_values = solve_with_controls(
             board, study, normalized, refinement=field
         )
@@ -387,13 +426,32 @@ def solve_adaptive(
         if settled and conserved:
             status = AdaptiveStatus.CONVERGED
             break
+        field = refine_field(problem, marked, policy.refinement_ratio, field)
+        if on_generation is not None:
+            on_generation(AdaptiveResume(tuple(generations), field, streak))
         if over_budget or last_pass:
             status = AdaptiveStatus.RESOURCE_LIMITED
             break
-        field = refine_field(problem, marked, policy.refinement_ratio, field)
+        if policy.max_seconds is not None and _time.monotonic() - started_at > policy.max_seconds:
+            # Out of wall-clock: stop at this boundary with everything kept,
+            # rather than letting the supervisor's hard timeout kill the
+            # process mid-pass and keep nothing.
+            status = AdaptiveStatus.RESOURCE_LIMITED
+            break
+        if should_stop is not None and should_stop():
+            status = AdaptiveStatus.CANCELLED_PARTIAL
+            break
 
-    if result is None:  # pragma: no cover - max_passes >= 1 is validated
-        raise RuntimeError("Adaptive loop produced no solve")
+    if result is None:
+        # A resume whose checkpoint already reached max_passes: nothing left
+        # to run. Re-solve the last generation's mesh once so the outcome
+        # carries a result and fields; the mesh is deterministic from the
+        # stored field, so this reproduces -- not approximates -- pass N.
+        result, field_data, problem, node_values = solve_with_controls(
+            board, study, normalized, refinement=field
+        )
+        final_field_data = field_data
+        status = AdaptiveStatus.RESOURCE_LIMITED
 
     quantities = _quantity_convergence(generations, policy.target_qoi_rel_change)
     if status == AdaptiveStatus.CONVERGED and any(

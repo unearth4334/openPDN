@@ -224,11 +224,14 @@ class Orchestrator:
             )
             if state is JobState.CANCELLING:
                 self.artifacts.discard_working(job_id)
+                self.artifacts.discard_checkpoint(job_id)
                 self.jobs.transition(job_id, JobState.CANCELLED, message="worker terminated")
             elif state is not None and not state.is_terminal:
                 # The worker died without reporting: an infrastructure
                 # failure. Release the lease immediately rather than waiting
-                # for expiry; recover_expired applies the attempt cap.
+                # for expiry; recover_expired applies the attempt cap. The
+                # checkpoint is deliberately *kept* -- it is the whole reason
+                # the requeued run can resume instead of restarting.
                 self.artifacts.discard_working(job_id)
                 self.jobs.recover_expired(
                     time.time() + self.limits.lease_seconds + 1.0, self.limits.max_attempts

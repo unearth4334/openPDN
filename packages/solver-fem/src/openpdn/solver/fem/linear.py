@@ -58,24 +58,27 @@ MAX_REFINEMENT_ROUNDS: Final = 3
 
 #: DOF count above which `AUTO` prefers the iterative backend.
 #:
-#: This is a **memory** guard, not a speed optimisation, and the measurements
-#: say so plainly. On `plane_neck_plane_board` the direct factorisation fills
-#: in badly as the problem grows -- L+U non-zeros against matrix non-zeros
-#: rise from 2.6x at 287 DOFs to 22.5x at 143,213, which is 189 bytes per DOF
-#: climbing to 1,880 and still climbing. Iterative memory is flat in
-#: comparison, since CG stores a handful of vectors and never factorises.
+#: Effectively disabled while the only preconditioner is Jacobi, and the
+#: number that disabled it is measured, not argued. A first threshold of
+#: 500,000 routed a 2,244,650-DOF solve to Jacobi-CG, which exhausted its
+#: 5,000-iteration budget at a relative residual of 4.2e-3 and -- correctly
+#: -- refused (ADR-0014 §6). The direct solve handles the same system in
+#: under two minutes within this machine's memory. Iteration count grows as
+#: sqrt(kappa) and kappa grows under refinement, so above the old threshold
+#: Jacobi-CG predictably *cannot* converge at tight tolerances: `AUTO` was
+#: turning feasible jobs into guaranteed failures, which is worse than
+#: either backend's honest limits.
 #:
-#: Speed points the other way at every size that can be measured here: direct
-#: took 0.10 s at 35,976 DOFs where Jacobi-preconditioned CG took 1.51 s.
-#: Switching earlier than this would trade a fast, deterministic solve for a
-#: slow one to solve a memory problem that does not exist yet.
+#: The crossover becomes real when an AMG preconditioner (ADR-0014's actual
+#: choice, environment-blocked at implementation time) makes iteration
+#: counts mesh-independent. Until then `AUTO` means direct, and `iterative`
+#: remains an explicit opt-in for memory-bound cases whose derived tolerance
+#: is loose enough for Jacobi to reach.
 #:
-#: Provisional, because the crossover that matters depends on the available
-#: worker memory and on a scalable preconditioner that is not installed here
-#: (see `_jacobi_preconditioner`). Extrapolating the fill trend, a direct
-#: solve near this size wants roughly a gigabyte -- comfortable -- while
-#: several million DOFs would not be.
-AUTO_DIRECT_MAX_DOFS: Final = 500_000
+#: The memory case for iterative is unchanged and still measured -- direct
+#: fill-in rises from 2.6x matrix non-zeros at 287 DOFs to 22.5x at 143,213
+#: (189 -> 1,880 bytes/DOF, still climbing) while CG memory is flat.
+AUTO_DIRECT_MAX_DOFS: Final = 100_000_000
 
 #: Fraction of the target discretisation error the linear solve is allowed to
 #: contribute. ADR-0014 §6: the linear algebra must never be the

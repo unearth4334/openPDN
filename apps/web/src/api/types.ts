@@ -419,6 +419,34 @@ export interface ResultMetrics {
     converged: boolean;
     quantities: Record<string, { coarse: number; fine: number; relative_change: number }>;
   } | null;
+  /**
+   * Adaptive (Reference) history. A different shape from `convergence`
+   * above and published under its own key on purpose: writing it into
+   * `convergence` crashed every consumer that renders the Verification
+   * comparison shape. Absent on fixed-mesh results.
+   */
+  reference?: {
+    status: string;
+    converged: boolean;
+    generations: {
+      index: number;
+      dofs: number;
+      elements: number;
+      quantity_of_interest: number;
+      qoi_rel_change: number | null;
+      estimated_error: number;
+      marked_elements: number;
+      quantities: Record<string, number>;
+    }[];
+    quantities: {
+      name: string;
+      converged: boolean;
+      singular: boolean;
+      rel_change: number | null;
+      extrapolated: number | null;
+      observed_order: number | null;
+    }[];
+  } | null;
   diagnostics: {
     code: string;
     severity: "info" | "warning" | "error";

@@ -137,6 +137,24 @@ class SimulationArtifactStore(Protocol):
         """Atomically promote the working directory to the published result."""
         ...
 
+    def checkpoint_dir(self, job_id: str) -> Path:
+        """Create and return a job's durable checkpoint directory.
+
+        Separate from the working directory on purpose: working state is
+        swept on failure and on orchestrator start, while a checkpoint must
+        survive both so a requeued Reference run resumes rather than
+        restarting from generation zero (ADR-0015 §9).
+        """
+        ...
+
+    def load_checkpoint_dir(self, job_id: str) -> Path | None:
+        """The checkpoint directory, or None when the job has none."""
+        ...
+
+    def discard_checkpoint(self, job_id: str) -> None:
+        """Delete a job's checkpoint once it reaches a terminal state."""
+        ...
+
     def discard_working(self, job_id: str) -> None:
         """Delete a job's working directory (cancellation, failure)."""
         ...

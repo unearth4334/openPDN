@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -52,9 +53,12 @@ from openpdn.solver.fem import SOLVER_VERSION, FemFieldData, FemSheetSolver
 from openpdn.solver.fem.adaptive import (
     AdaptiveOutcome,
     AdaptivePolicy,
+    AdaptiveResume,
     AdaptiveStatus,
+    Generation,
     solve_adaptive,
 )
+from openpdn.solver.fem.controls import RefinementField
 from openpdn.solver.fem.solver import PROBE_TEST_CURRENT_A
 
 if TYPE_CHECKING:
@@ -113,6 +117,7 @@ def run_job(
     lease_seconds: float,
     normalizer: GeometryNormalizer,
     board_decoder: BoardDecoder,
+    time_budget_seconds: float | None = None,
 ) -> int:
     """Execute one claimed job to a terminal state. Returns an exit code."""
     record = jobs.get(job_id)
@@ -129,10 +134,13 @@ def run_job(
     jobs.transition(job_id, JobState.RUNNING)
     with _Heartbeat(jobs, job_id, worker_id, lease_seconds):
         try:
-            summary = _execute(record, jobs, artifacts, normalizer, board_decoder)
+            summary = _execute(
+                record, jobs, artifacts, normalizer, board_decoder, time_budget_seconds
+            )
         except SolverError as exc:
             # Numerical/configuration failure: terminal, diagnose don't retry.
             artifacts.discard_working(job_id)
+            artifacts.discard_checkpoint(job_id)
             jobs.transition(job_id, JobState.FAILED, message=str(exc))
             _logger.warning(
                 "worker.numerical_failure",
@@ -141,6 +149,7 @@ def run_job(
             return 1
         except Exception as exc:
             artifacts.discard_working(job_id)
+            artifacts.discard_checkpoint(job_id)
             jobs.transition(job_id, JobState.FAILED, message=f"{type(exc).__name__}: {exc}")
             _logger.exception("worker.failed", extra={"event": "worker.failed", "job_id": job_id})
             return 1
@@ -165,6 +174,7 @@ def _execute(
     artifacts: SimulationArtifactStore,
     normalizer: GeometryNormalizer,
     board_decoder: BoardDecoder,
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
     """The pipeline: load board, solve, serialise, publish."""
     spec = record.spec
@@ -181,7 +191,7 @@ def _execute(
 
     if spec.reference_policy is not None:
         return _execute_reference(
-            record, jobs, artifacts, normalizer, board, study, timings
+            record, jobs, artifacts, normalizer, board, study, timings, time_budget_seconds
         )
 
     jobs.update_stage(job_id, "meshing")
@@ -224,6 +234,7 @@ def _execute_reference(
     board: Board,
     study: AnalysisStudy,
     timings: dict[str, Any],
+    time_budget_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run an adaptive Reference job and publish its convergence evidence.
 
@@ -232,43 +243,102 @@ def _execute_reference(
     back a single coarse solve wearing a Reference label. That is precisely
     the quiet degradation this tier exists to prevent, so adaptive specs
     branch here instead.
+
+    Three durability behaviours live here rather than in the loop:
+
+    * every completed generation is checkpointed, so a worker that dies
+      silently resumes on requeue instead of restarting (ADR-0015 §9);
+    * SIGTERM and a CANCELLING job state stop the loop at the next pass
+      boundary and publish what exists as a partial, never-converged result
+      -- losing three finished generations to a cancel button is waste, but
+      presenting them as Reference quality would be a lie, so they are kept
+      *and* labelled;
+    * the loop self-limits to a fraction of the orchestrator's hard timeout,
+      because the alternative is a SIGKILL mid-pass that keeps nothing.
     """
     spec = record.spec
     job_id = spec.job_id
     policy = spec.reference_policy
     assert policy is not None  # noqa: S101 - guarded by the caller
 
-    jobs.update_stage(job_id, "solving")
-    started = time.perf_counter()
-    outcome = solve_adaptive(
-        board,
-        study,
-        normalizer,
-        AdaptivePolicy(
-            target_qoi_rel_change=policy.target_qoi_rel_change,
-            max_passes=policy.max_passes,
-            max_dofs=policy.max_dofs,
-            theta=policy.theta,
-            refinement_ratio=policy.refinement_ratio,
-            goal_oriented=policy.goal_oriented,
-        ),
-    )
-    timings["adaptive_s"] = time.perf_counter() - started
+    resume = _load_checkpoint(artifacts, spec)
+    if resume is not None:
+        _logger.info(
+            "worker.reference_resumed",
+            extra={
+                "event": "worker.reference_resumed",
+                "job_id": job_id,
+                "completed_generations": len(resume.generations),
+            },
+        )
+
+    stop_event = threading.Event()
+    previous_handler = signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+
+    def _should_stop() -> bool:
+        if stop_event.is_set():
+            return True
+        current = jobs.get(job_id)
+        return current is not None and current.state is JobState.CANCELLING
+
+    try:
+        jobs.update_stage(job_id, "solving")
+        started = time.perf_counter()
+        outcome = solve_adaptive(
+            board,
+            study,
+            normalizer,
+            AdaptivePolicy(
+                target_qoi_rel_change=policy.target_qoi_rel_change,
+                max_passes=policy.max_passes,
+                max_dofs=policy.max_dofs,
+                theta=policy.theta,
+                refinement_ratio=policy.refinement_ratio,
+                goal_oriented=policy.goal_oriented,
+                max_seconds=time_budget_seconds,
+            ),
+            resume=resume,
+            on_generation=lambda state: _save_checkpoint(artifacts, spec, state),
+            should_stop=_should_stop,
+        )
+        timings["adaptive_s"] = time.perf_counter() - started
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
     jobs.update_stage(job_id, "serializing")
     started = time.perf_counter()
     working = artifacts.working_dir(job_id)
     if outcome.field_data is None:  # pragma: no cover - the loop always solves
         raise RuntimeError("Adaptive run produced no field data to publish")
-    convergence = _reference_convergence(outcome)
     summary = _write_artifacts(
-        working, spec, board, outcome.result, outcome.field_data, convergence, timings
+        working,
+        spec,
+        board,
+        outcome.result,
+        outcome.field_data,
+        None,
+        timings,
+        reference=_reference_convergence(outcome),
     )
-    summary["reference_quality"] = _quality_of(outcome).value
+    quality = _quality_of(outcome)
+    summary["reference_quality"] = quality.value
+    if outcome.status == AdaptiveStatus.CANCELLED_PARTIAL:
+        summary["partial"] = True
+        summary["has_warnings"] = True
     timings["serialize_s"] = time.perf_counter() - started
     _write_manifest(working, spec, outcome.result, timings, normalizer.version)
 
     artifacts.publish(job_id)
+    artifacts.discard_checkpoint(job_id)
+
+    if outcome.status == AdaptiveStatus.CANCELLED_PARTIAL:
+        # The cancel wins the lifecycle -- the run is CANCELLED, not
+        # completed -- but the partial evidence is published and the summary
+        # travels with the terminal state so the UI can say "cancelled,
+        # partial result available" rather than showing nothing.
+        jobs.transition(
+            job_id, JobState.CANCELLED, result_summary_json=json.dumps(summary)
+        )
     return summary
 
 
@@ -281,7 +351,106 @@ def _quality_of(outcome: AdaptiveOutcome) -> ResultQuality:
         ),
         AdaptiveStatus.RESOURCE_LIMITED: ResultQuality.RESOURCE_LIMITED,
         AdaptiveStatus.NOT_CONVERGED: ResultQuality.NOT_CONVERGED,
+        AdaptiveStatus.CANCELLED_PARTIAL: ResultQuality.NOT_CONVERGED,
     }[outcome.status]
+
+
+#: Checkpoint format version. Bump on any change to what is stored.
+_CHECKPOINT_SCHEMA = 1
+
+
+def _save_checkpoint(
+    artifacts: SimulationArtifactStore, spec: SimulationJobSpec, state: AdaptiveResume
+) -> None:
+    """Persist one pass boundary, atomically.
+
+    The checkpoint is small on purpose: re-meshing is deterministic from
+    board, study and sizing field (ADR-0013 §9), so the stored field seeds
+    and generation metrics are sufficient to continue -- no mesh, no
+    solution, and therefore no `allow_pickle` question at all.
+    """
+    payload = {
+        "schema": _CHECKPOINT_SCHEMA,
+        "signature": spec.signature,
+        "streak": state.streak,
+        "generations": [
+            {
+                "index": g.index,
+                "dof_count": g.dof_count,
+                "element_count": g.element_count,
+                "quantity_of_interest": g.quantity_of_interest,
+                "qoi_rel_change": g.qoi_rel_change,
+                "estimated_error": g.estimated_error,
+                "current_imbalance_fraction": g.current_imbalance_fraction,
+                "power_mismatch_fraction": g.power_mismatch_fraction,
+                "marked_elements": g.marked_elements,
+                "quantities": g.quantities,
+            }
+            for g in state.generations
+        ],
+        "field": (
+            None
+            if state.field is None
+            else {
+                "points": state.field.points.tolist(),
+                "sizes": state.field.sizes.tolist(),
+            }
+        ),
+    }
+    directory = artifacts.checkpoint_dir(spec.job_id)
+    temp = directory / "checkpoint.json.tmp"
+    temp.write_text(json.dumps(payload))
+    temp.replace(directory / "checkpoint.json")
+
+
+def _load_checkpoint(
+    artifacts: SimulationArtifactStore, spec: SimulationJobSpec
+) -> AdaptiveResume | None:
+    """Load a resumable checkpoint, or None.
+
+    A checkpoint whose signature does not match this spec is discarded, not
+    trusted: the signature hashes every solver-affecting input, so a
+    mismatch means the stored state describes a different computation.
+    """
+    directory = artifacts.load_checkpoint_dir(spec.job_id)
+    if directory is None:
+        return None
+    path = directory / "checkpoint.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        artifacts.discard_checkpoint(spec.job_id)
+        return None
+    if payload.get("schema") != _CHECKPOINT_SCHEMA or payload.get("signature") != spec.signature:
+        artifacts.discard_checkpoint(spec.job_id)
+        return None
+    generations = tuple(
+        Generation(
+            index=item["index"],
+            dof_count=item["dof_count"],
+            element_count=item["element_count"],
+            quantity_of_interest=item["quantity_of_interest"],
+            qoi_rel_change=item["qoi_rel_change"],
+            estimated_error=item["estimated_error"],
+            current_imbalance_fraction=item["current_imbalance_fraction"],
+            power_mismatch_fraction=item["power_mismatch_fraction"],
+            marked_elements=item["marked_elements"],
+            quantities=dict(item["quantities"]),
+        )
+        for item in payload["generations"]
+    )
+    raw_field = payload.get("field")
+    field = (
+        None
+        if raw_field is None
+        else RefinementField(
+            np.asarray(raw_field["points"], dtype=np.float64),
+            np.asarray(raw_field["sizes"], dtype=np.float64),
+        )
+    )
+    return AdaptiveResume(generations=generations, field=field, streak=int(payload["streak"]))
 
 
 def _reference_convergence(outcome: AdaptiveOutcome) -> dict[str, Any]:
@@ -330,11 +499,39 @@ def _load_board(
 
 def run_inline(
     spec: SimulationJobSpec, board: Board, normalizer: GeometryNormalizer
-) -> tuple[ElectricalAnalysisResult, FemFieldData]:
-    """Solve a spec directly in-process (CLI debugging path, no queue)."""
+) -> tuple[ElectricalAnalysisResult, FemFieldData, dict[str, Any] | None]:
+    """Solve a spec directly in-process (CLI debugging path, no queue).
+
+    A Reference spec runs its adaptive loop here too -- the inline path had
+    the same silent-degradation hole the queued path had, where an adaptive
+    spec was quietly solved as a fixed mesh. The third element is the
+    convergence history in exactly the shape the published `metrics.json`
+    carries (None for fixed-mesh runs), so callers render one format whether
+    the run was inline or queued -- and so the CLI never has to import the
+    concrete solver package, which the architecture boundary forbids.
+    """
     study = _study_from_spec(spec, board, refine_factor=1.0)
+    if spec.reference_policy is not None:
+        policy = spec.reference_policy
+        outcome = solve_adaptive(
+            board,
+            study,
+            normalizer,
+            AdaptivePolicy(
+                target_qoi_rel_change=policy.target_qoi_rel_change,
+                max_passes=policy.max_passes,
+                max_dofs=policy.max_dofs,
+                theta=policy.theta,
+                refinement_ratio=policy.refinement_ratio,
+                goal_oriented=policy.goal_oriented,
+            ),
+        )
+        if outcome.field_data is None:  # pragma: no cover - the loop always solves
+            raise RuntimeError("Adaptive run produced no field data")
+        return outcome.result, outcome.field_data, _reference_convergence(outcome)
     solver = FemSheetSolver(normalizer=normalizer)
-    return solver.solve_with_fields(board, study)
+    result, fields = solver.solve_with_fields(board, study)
+    return result, fields, None
 
 
 def _study_from_spec(spec: SimulationJobSpec, board: Board, refine_factor: float) -> AnalysisStudy:
@@ -508,6 +705,7 @@ def _write_artifacts(
     fields: FemFieldData,
     convergence: dict[str, Any] | None,
     timings: dict[str, float],
+    reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write field arrays and metrics; return the compact summary."""
     layers_dir = working / "layers"
@@ -625,6 +823,11 @@ def _write_artifacts(
         },
         "engineering_quantities": quantities,
         "convergence": convergence,
+        # Reference history has a different shape from the Verification
+        # comparison above and is published under its own key -- writing it
+        # into "convergence" crashed every consumer that renders the
+        # Verification shape.
+        "reference": reference,
         "diagnostics": diagnostics,
         "layer_files": layer_files,
         "timings_s": timings,

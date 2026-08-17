@@ -27,6 +27,7 @@ import type {
   AccuracyProfile,
   BoardReviewResponse,
   EstimateResponse,
+  ReferencePolicyRequest,
   SimulationDraftRequest,
   SimulationKind,
   TerminalResponse,
@@ -39,6 +40,7 @@ const ACCURACY_LABELS: { id: AccuracyProfile; label: string }[] = [
   { id: "standard", label: "Standard" },
   { id: "high", label: "High" },
   { id: "verification", label: "Verification" },
+  { id: "reference", label: "Reference" },
 ];
 
 /** Debounce for estimate refreshes while the user edits the draft. */
@@ -62,6 +64,10 @@ export function SimulationPanel() {
   const [sourceVoltage, setSourceVoltage] = useState("0.85");
   const [loads, setLoads] = useState<LoadRow[]>([{ terminalIds: [], viaIds: [], currentA: "1.0" }]);
   const [accuracy, setAccuracy] = useState<AccuracyProfile>("standard");
+  const [refTargetPct, setRefTargetPct] = useState("0.10");
+  const [refMaxPasses, setRefMaxPasses] = useState("5");
+  const [refMaxDofs, setRefMaxDofs] = useState("2000000");
+  const [refElementOrder, setRefElementOrder] = useState<"p1" | "p2">("p2");
   const [viaPlatingUm, setViaPlatingUm] = useState("25");
   const [estimate, setEstimate] = useState<EstimateResponse | null>(null);
   const [estimateError, setEstimateError] = useState<string | null>(null);
@@ -133,6 +139,13 @@ export function SimulationPanel() {
         to_terminal_ids: [toId],
         accuracy,
         via_plating_um: numberOrNull(viaPlatingUm),
+        reference: referencePolicy(
+          accuracy,
+          refTargetPct,
+          refMaxPasses,
+          refMaxDofs,
+          refElementOrder,
+        ),
       };
     }
     const parsedLoads = loads
@@ -155,6 +168,7 @@ export function SimulationPanel() {
       loads: parsedLoads,
       accuracy,
       via_plating_um: numberOrNull(viaPlatingUm),
+      reference: referencePolicy(accuracy, refTargetPct, refMaxPasses, refMaxDofs, refElementOrder),
     };
   }, [
     kind,
@@ -166,6 +180,10 @@ export function SimulationPanel() {
     loads,
     accuracy,
     viaPlatingUm,
+    refTargetPct,
+    refMaxPasses,
+    refMaxDofs,
+    refElementOrder,
   ]);
 
   // Debounced estimate refresh.
@@ -421,6 +439,60 @@ export function SimulationPanel() {
                   </button>
                 ))}
               </div>
+              {accuracy === "reference" ? (
+                <div className="sim-reference">
+                  <label className="sim-field">
+                    <span className="sim-field__label">Target convergence</span>
+                    <span className="sim-field__unit-row">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.001"
+                        value={refTargetPct}
+                        aria-label="Reference convergence target in percent"
+                        onChange={(event) => setRefTargetPct(event.target.value)}
+                      />
+                      <span className="sim-field__unit">%</span>
+                    </span>
+                  </label>
+                  <label className="sim-field">
+                    <span className="sim-field__label">Max adaptive passes</span>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      max="32"
+                      value={refMaxPasses}
+                      onChange={(event) => setRefMaxPasses(event.target.value)}
+                    />
+                  </label>
+                  <label className="sim-field">
+                    <span className="sim-field__label">Max DOFs</span>
+                    <input
+                      type="number"
+                      step="100000"
+                      min="1000"
+                      value={refMaxDofs}
+                      onChange={(event) => setRefMaxDofs(event.target.value)}
+                    />
+                  </label>
+                  <label className="sim-field">
+                    <span className="sim-field__label">Element order</span>
+                    <select
+                      value={refElementOrder}
+                      onChange={(event) => setRefElementOrder(event.target.value as "p1" | "p2")}
+                    >
+                      <option value="p2">Quadratic (P2)</option>
+                      <option value="p1">Linear (P1)</option>
+                    </select>
+                  </label>
+                  <p className="sim-note">
+                    Runs solve–estimate–refine passes until the answer settles or a ceiling is hit.
+                    The estimate below is the starting mesh; the final mesh is decided by the error
+                    estimator, bounded by Max DOFs.
+                  </p>
+                </div>
+              ) : null}
               <EstimateSummary estimate={estimate} error={estimateError} pending={draft !== null} />
             </div>
 
@@ -460,6 +532,32 @@ export function SimulationPanel() {
       </div>
     </aside>
   );
+}
+
+/**
+ * The adaptive policy for the draft, or undefined for fixed-mesh profiles.
+ * The target is entered as a percentage because that is how engineers read
+ * convergence ("0.1 %"), and sent as the fraction the API expects.
+ */
+function referencePolicy(
+  accuracy: AccuracyProfile,
+  targetPct: string,
+  maxPasses: string,
+  maxDofs: string,
+  elementOrder: "p1" | "p2",
+): ReferencePolicyRequest | null {
+  if (accuracy !== "reference") {
+    return null;
+  }
+  const target = Number(targetPct) / 100;
+  const passes = Number(maxPasses);
+  const dofs = Number(maxDofs);
+  return {
+    target_qoi_rel_change: Number.isFinite(target) && target > 0 ? target : 1e-3,
+    max_passes: Number.isFinite(passes) && passes >= 1 ? Math.floor(passes) : 5,
+    max_dofs: Number.isFinite(dofs) && dofs >= 1 ? Math.floor(dofs) : 2_000_000,
+    element_order: elementOrder,
+  };
 }
 
 function addUnique(ids: string[], id: string): string[] {

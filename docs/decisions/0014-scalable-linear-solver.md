@@ -139,8 +139,13 @@ worth stating precisely.
   comparison. `AUTO`'s threshold was set to `500,000` DOFs on that basis --
   a memory guard, deliberately far above the sizes where direct still wins on
   time, rather than the speed-motivated crossover §5 anticipated.
-* Consequence for §5: until a scalable preconditioner is available, `Auto`
-  choosing iterative is a way to *fit* a problem, never to finish it sooner.
-  The `BYTES_PER_DOF = 1500` estimate in `fem_planner.py` is a reasonable
-  mid-range figure but under-predicts at the top of the measured range
-  (`1,880` at `143k`), which matters for budget refusals on large jobs.
+* Consequence for §5, sharpened by a failure: a first `AUTO` threshold of
+  `500,000` DOFs routed a `2,244,650`-DOF solve to Jacobi-CG, which
+  exhausted its 5,000-iteration budget at residual `4.2e-3` and refused --
+  correct behaviour per §6, but `AUTO` had turned a feasible job into a
+  guaranteed failure, since the direct solve handles the same system in
+  257 s within 11.25 GiB. **`AUTO` therefore means direct until an AMG
+  preconditioner exists**; `iterative` stays as an explicit opt-in. That
+  2.28M-DOF direct solve also re-based the memory estimate: peak process
+  RSS (~5,300 bytes/DOF, what the OOM killer acts on) rather than factor
+  storage (~1,880 at 143k) now sets `BYTES_PER_DOF = 5000`.

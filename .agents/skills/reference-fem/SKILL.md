@@ -155,7 +155,12 @@ extension of that pipeline, not a parallel one.
   287 -> 35,976), and direct is *faster* at every size measurable so far.
   Choose iterative to make a problem **fit**, never to make it finish
   sooner. AMG is what would change that; until then do not present the
-  iterative path as a speed-up.
+  iterative path as a speed-up. Measured consequence: at 2.24M DOFs
+  Jacobi-CG exhausted 5,000 iterations at residual 4.2e-3 and refused,
+  where direct solved the same system in 257 s / 11.25 GiB -- so `AUTO`
+  deliberately means direct until AMG lands. Do not lower
+  `AUTO_DIRECT_MAX_DOFS` back without a preconditioner that makes
+  iteration counts mesh-independent.
 * The reason iterative exists is the direct factorisation's fill-in: 2.6x
   the matrix non-zeros at 287 DOFs, 22.5x at 143,213 (189 -> 1,880 bytes per
   DOF, still climbing). Iterative memory is flat.
@@ -206,11 +211,14 @@ extension of that pipeline, not a parallel one.
   whatever the client asked for. Over-budget work is refused, never degraded.
 * Reference jobs are a separate priority class and admission accounts for
   estimated *memory* — one Reference job can take a whole worker.
-* Completed generations are *intended* to be checkpointed so a cancelled run
-  can keep its latest valid generation, labelled partial and
-  `NOT_CONVERGED`. **This is not implemented yet** -- a requeued Reference
-  run restarts from generation zero. Never present an intermediate
-  generation as Reference quality.
+* Completed generations are checkpointed at every pass boundary, and a
+  requeued run resumes **bit-for-bit** -- the checkpoint stores only
+  generation metrics, sizing-field seeds and the streak, because re-meshing
+  is deterministic and everything else re-derives. Checkpoints live outside
+  `results/` so the stale-working sweep cannot destroy them; a signature
+  mismatch discards rather than trusts. Cancellation publishes the partial
+  as `NOT_CONVERGED` with the job CANCELLED -- kept *and* labelled. Never
+  present an intermediate generation as Reference quality.
 * **An adaptive spec must reach the adaptive path.** The worker branches on
   `spec.reference_policy`; a Reference job that fell through to the
   fixed-mesh branch would silently ignore its whole policy and still publish

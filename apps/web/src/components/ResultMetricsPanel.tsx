@@ -72,6 +72,8 @@ export function ResultMetricsPanel({ metrics }: { metrics: ResultMetrics }) {
         </tbody>
       </table>
 
+      {metrics.reference ? <ReferenceConvergence reference={metrics.reference} /> : null}
+
       {convergence ? (
         <>
           <div className="panel__header">Convergence</div>
@@ -169,6 +171,68 @@ export function ResultMetricsPanel({ metrics }: { metrics: ResultMetrics }) {
         </>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The adaptive run's own evidence: quality state, per-generation history,
+ * and per-quantity verdicts. Rendered from `metrics.reference`, never from
+ * `metrics.convergence` -- the two carry different shapes, and an early
+ * build that shared the key crashed this panel on every Reference result.
+ */
+function ReferenceConvergence({
+  reference,
+}: {
+  reference: NonNullable<ResultMetrics["reference"]>;
+}) {
+  const quality = reference.status.replace(/_/g, " ");
+  return (
+    <>
+      <div className="panel__header">Reference convergence</div>
+      <p className={reference.converged ? "sim-note" : "sim-error"}>
+        {reference.converged ? `Converged (${quality})` : `NOT a converged result: ${quality}`}
+      </p>
+      <table className="data-table" aria-label="Adaptive generations">
+        <thead>
+          <tr>
+            <th>Pass</th>
+            <th>DOFs</th>
+            <th>QoI</th>
+            <th>ΔQoI</th>
+            <th>Est. error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {reference.generations.map((generation) => (
+            <tr key={generation.index}>
+              <td className="numeric">{generation.index}</td>
+              <td className="numeric">{generation.dofs.toLocaleString()}</td>
+              <td className="numeric">{generation.quantity_of_interest.toExponential(6)}</td>
+              <td className="numeric">
+                {generation.qoi_rel_change === null
+                  ? "—"
+                  : generation.qoi_rel_change.toExponential(2)}
+              </td>
+              <td className="numeric">{generation.estimated_error.toExponential(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="result-warnings">
+        {reference.quantities.map((quantity) => (
+          <li key={quantity.name}>
+            <span className={`diag diag--${quantity.converged ? "info" : "warning"}`}>
+              {quantity.converged ? "converged" : "open"}
+            </span>{" "}
+            {quantity.name}
+            {quantity.singular ? " — singular: reported, never converged on" : ""}
+            {quantity.extrapolated !== null && quantity.observed_order !== null
+              ? ` — extrapolated ${quantity.extrapolated.toExponential(6)} (order ${quantity.observed_order.toFixed(2)})`
+              : ""}
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

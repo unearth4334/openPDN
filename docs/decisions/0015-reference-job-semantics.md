@@ -156,8 +156,18 @@ work uncovered.
   hold live rows. Indexes over migrated columns are created after the
   migration runs, not in the same script.
 
-**Not done: checkpointing (§9).** Completed adaptive generations are not yet
-persisted, so a cancelled or requeued Reference run still restarts from
-generation zero and `discard_working` still deletes partial state. The
-generation history is published with a finished result, but resuming an
-unfinished one is outstanding.
+**§9 (checkpointing) is now implemented**, and the design leans on
+determinism: because re-meshing is a pure function of board, study and
+sizing field (ADR-0013 §9), a checkpoint stores only the completed
+generations' metrics, the sizing-field seeds and the convergence streak --
+no mesh, no solution, no pickles, plain versioned JSON. A resumed run was
+*tested* to reproduce the interrupted run bit-for-bit, so a crash-and-
+requeue changes nothing about the published answer. Checkpoints live in a
+tree separate from `results/` precisely so the stale-working sweep that
+enables crash recovery cannot destroy the state that makes recovery cheap;
+a signature mismatch discards the checkpoint rather than trusting it.
+Cancellation stops the loop at the next pass boundary and publishes the
+partial evidence with the job CANCELLED and the result labelled
+NOT_CONVERGED -- kept *and* labelled. The loop also self-limits to 0.8x the
+orchestrator's hard timeout, because the alternative was a SIGKILL mid-pass
+that keeps nothing.

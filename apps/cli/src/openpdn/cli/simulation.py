@@ -19,6 +19,7 @@ import numpy as np
 from openpdn.application.simulation_models import (
     AccuracyProfile,
     LoadSpec,
+    ReferencePolicy,
     SimulationDraft,
     SimulationKind,
     SimulationRequestError,
@@ -49,6 +50,38 @@ def register(subparsers: Any) -> None:
                 "choices": [p.value for p in AccuracyProfile],
                 "default": AccuracyProfile.STANDARD.value,
                 "help": "Accuracy profile (default: standard).",
+            },
+        ),
+        (
+            "--target-error",
+            {
+                "type": float,
+                "default": 1e-3,
+                "help": "Reference only: QoI relative-change target (default 1e-3).",
+            },
+        ),
+        (
+            "--max-passes",
+            {
+                "type": int,
+                "default": 5,
+                "help": "Reference only: adaptive pass ceiling (default 5).",
+            },
+        ),
+        (
+            "--max-dofs",
+            {
+                "type": int,
+                "default": 2_000_000,
+                "help": "Reference only: DOF ceiling (default 2,000,000).",
+            },
+        ),
+        (
+            "--element-order",
+            {
+                "choices": ["p1", "p2"],
+                "default": "p2",
+                "help": "Reference only: element order (default p2).",
             },
         ),
         (
@@ -99,6 +132,10 @@ def register(subparsers: Any) -> None:
     result_commands = results.add_subparsers(dest="results_command", required=True)
     r_inspect = result_commands.add_parser("inspect", help="Print a result's metrics.")
     r_inspect.add_argument("job_id")
+    r_conv = result_commands.add_parser(
+        "convergence", help="Print a Reference result's convergence history."
+    )
+    r_conv.add_argument("job_id")
     r_vtk = result_commands.add_parser(
         "export-vtk", help="Export result fields as VTK for ParaView."
     )
@@ -147,6 +184,16 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
 
     net_id = _resolve_net(board, args.net)
     plating_m = args.via_plating_um * 1e-6 if args.via_plating_um is not None else None
+    reference_policy = (
+        ReferencePolicy(
+            target_qoi_rel_change=args.target_error,
+            max_passes=args.max_passes,
+            max_dofs=args.max_dofs,
+            element_order=args.element_order,
+        )
+        if args.accuracy == AccuracyProfile.REFERENCE.value
+        else None
+    )
 
     if args.simulate_kind == "resistance":
         draft = SimulationDraft(
@@ -157,6 +204,7 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
             to_terminal_ids=(_resolve_terminal(board, args.to_terminal, net_id),),
             accuracy=AccuracyProfile(args.accuracy),
             via_plating_m=plating_m,
+            reference_policy=reference_policy,
         )
     else:
         loads = []
@@ -179,6 +227,7 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
             loads=tuple(loads),
             accuracy=AccuracyProfile(args.accuracy),
             via_plating_m=plating_m,
+            reference_policy=reference_policy,
         )
 
     plan = container.simulation_service.plan(draft)
@@ -201,8 +250,12 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
     # Inline execution: the numerical debugging path.
     from openpdn.infrastructure.simulation_worker import run_inline
 
-    result, fields = run_inline(plan.resolved_spec, board, container.geometry_normalizer)
+    result, fields, reference_history = run_inline(
+        plan.resolved_spec, board, container.geometry_normalizer
+    )
 
+    if reference_history is not None:
+        _print_reference_history(reference_history)
     print(f"mesh: {result.stats.mesh_nodes} nodes, {result.stats.mesh_elements} elements")
     print(f"residual: {result.stats.residual:.3e}")
     for probe in result.probes:
@@ -302,11 +355,52 @@ def _command_results(args: argparse.Namespace, container: Container) -> int:
         metrics = json.loads((result_dir / "metrics.json").read_text())
         print(json.dumps(metrics, indent=2, sort_keys=True))
         return EXIT_OK
+    if args.results_command == "convergence":
+        metrics = json.loads((result_dir / "metrics.json").read_text())
+        reference = metrics.get("reference")
+        if reference is None:
+            print(
+                "error: not a Reference result (no adaptive history)",
+                file=sys.stderr,
+            )
+            return EXIT_FAILURE
+        _print_reference_history(reference)
+        return EXIT_OK
     if args.results_command == "export-vtk":
         _export_vtk(result_dir, args.output)
         print(f"wrote {args.output}")
         return EXIT_OK
     raise AssertionError
+
+
+def _print_reference_history(reference: dict[str, Any]) -> None:
+    """Render the published adaptive history as the convergence table."""
+    header = (
+        f"{'pass':>4} {'DOFs':>9} {'elements':>9} {'QoI':>14} "
+        f"{'dQoI':>10} {'est. error':>12} {'marked':>8}"
+    )
+    print(header)
+    for generation in reference["generations"]:
+        change = generation["qoi_rel_change"]
+        rendered = "--" if change is None else f"{change:.3e}"
+        print(
+            f"{generation['index']:>4} {generation['dofs']:>9} "
+            f"{generation['elements']:>9} {generation['quantity_of_interest']:>14.9f} "
+            f"{rendered:>10} {generation['estimated_error']:>12.4e} "
+            f"{generation['marked_elements']:>8}"
+        )
+    print(f"status: {reference['status']}")
+    for quantity in reference["quantities"]:
+        detail = ""
+        if quantity["singular"]:
+            detail = " (singular: reported, never converged on)"
+        elif quantity["extrapolated"] is not None:
+            detail = (
+                f" extrapolated={quantity['extrapolated']:.9g}"
+                f" observed_order={quantity['observed_order']:.2f}"
+            )
+        state = "converged" if quantity["converged"] else "not converged"
+        print(f"  {quantity['name']}: {state}{detail}")
 
 
 def _export_vtk(result_dir: Path, output: Path) -> None:
@@ -387,6 +481,10 @@ def _command_worker(args: argparse.Namespace, container: Container) -> int:
         lease_seconds=container.worker_limits.lease_seconds,
         normalizer=container.geometry_normalizer,
         board_decoder=container.board_decoder,  # type: ignore[arg-type]
+        # Self-limit adaptive runs below the orchestrator's hard timeout:
+        # stopping at a pass boundary keeps every completed generation,
+        # where the SIGKILL at the full limit keeps nothing.
+        time_budget_seconds=container.worker_limits.max_job_seconds * 0.8,
     )
 
 

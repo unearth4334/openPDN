@@ -47,6 +47,7 @@ class FilesystemArtifactStore:
         self._root = root
         (root / "boards").mkdir(parents=True, exist_ok=True)
         (root / "results").mkdir(parents=True, exist_ok=True)
+        (root / "checkpoints").mkdir(parents=True, exist_ok=True)
 
     # -- boards -----------------------------------------------------------------------
 
@@ -108,6 +109,38 @@ class FilesystemArtifactStore:
         path = self._safe_job_dir(job_id, working=False)
         if path.is_dir():
             shutil.rmtree(path)
+
+    # -- checkpoints ------------------------------------------------------------------
+    #
+    # Deliberately a separate tree from `results/`. Working directories are
+    # transient by design -- discarded on failure and swept wholesale by
+    # `cleanup_stale_working` on orchestrator start -- while a checkpoint's
+    # entire purpose is to survive exactly those events so a requeued
+    # Reference run resumes instead of restarting (ADR-0015 §9). Putting
+    # checkpoints inside the working dir would have the cleanup that enables
+    # crash recovery destroy the state that makes recovery cheap.
+
+    def checkpoint_dir(self, job_id: str) -> Path:
+        """Create and return the job's checkpoint directory."""
+        path = self._safe_checkpoint_dir(job_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def load_checkpoint_dir(self, job_id: str) -> Path | None:
+        """The checkpoint directory, or None when the job has none."""
+        path = self._safe_checkpoint_dir(job_id)
+        return path if path.is_dir() else None
+
+    def discard_checkpoint(self, job_id: str) -> None:
+        """Delete a job's checkpoint. Called when the job reaches any terminal state."""
+        path = self._safe_checkpoint_dir(job_id)
+        if path.is_dir():
+            shutil.rmtree(path)
+
+    def _safe_checkpoint_dir(self, job_id: str) -> Path:
+        if not _JOB_ID_PATTERN.fullmatch(job_id):
+            raise ArtifactSecurityError(f"Invalid job id {job_id!r}")
+        return self._root / "checkpoints" / job_id
 
     def cleanup_stale_working(self) -> int:
         """Delete working directories left by crashed workers; returns count."""
