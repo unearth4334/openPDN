@@ -22,29 +22,19 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import splu
 
-from openpdn.solver.api import SolverConvergenceError
 from openpdn.solver.fem.errors import DisconnectedTerminalError
+from openpdn.solver.fem.linear import (
+    DIRECT,
+    LinearPolicy,
+    LinearReport,
+    solve_reduced,
+)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
 
     from openpdn.solver.fem.problem import SheetProblem
-
-#: Relative residual above which a direct solve is treated as failed. A
-#: healthy SuperLU factorisation of a well-posed conduction matrix reaches
-#: 1e-10 or better; anything above this signals severe ill-conditioning
-#: (near-degenerate elements, extreme conductance contrast) worth refusing.
-DIRECT_RESIDUAL_LIMIT = 1e-6
-
-#: Iterative-refinement rounds attempted when the first solve's residual
-#: misses the limit. Refinement reuses the factorisation (one extra
-#: triangular solve per round) and typically recovers several digits on
-#: ill-conditioned but solvable systems; a system that does not improve is
-#: genuinely sick and is still refused.
-MAX_REFINEMENT_ROUNDS = 3
-
 
 @dataclass(frozen=True)
 class Excitation:
@@ -70,9 +60,15 @@ class Solution:
     active_dofs: int
     factor_seconds: float
     solve_seconds: float
+    #: Which backend ran, and how it behaved (ADR-0014 §7).
+    linear: LinearReport | None = None
 
 
-def solve_excitation(problem: SheetProblem, excitation: Excitation) -> Solution:
+def solve_excitation(
+    problem: SheetProblem,
+    excitation: Excitation,
+    policy: LinearPolicy | None = None,
+) -> Solution:
     """Solve the conduction problem under one excitation.
 
     Copper components that contain no Dirichlet DOF are electrically floating
@@ -86,8 +82,6 @@ def solve_excitation(problem: SheetProblem, excitation: Excitation) -> Solution:
         SolverConvergenceError: The direct solve produced an unacceptable
             residual (severely ill-conditioned system).
     """
-    import time
-
     if not excitation.dirichlet:
         raise DisconnectedTerminalError("An excitation needs at least one fixed potential")
 
@@ -129,47 +123,22 @@ def solve_excitation(problem: SheetProblem, excitation: Excitation) -> Solution:
         k_fd = matrix[free_index][:, dirichlet_dofs]
         rhs = rhs_full[free_index] - k_fd @ dirichlet_values
 
-        started = time.perf_counter()
-        try:
-            factor = splu(k_ff)
-        except RuntimeError as exc:
-            raise SolverConvergenceError(
-                f"Sparse factorisation failed: {exc}. This usually means a "
-                "degenerate mesh element or a zero-conductance region."
-            ) from exc
-        factor_seconds = time.perf_counter() - started
-
-        started = time.perf_counter()
-        v_free = factor.solve(rhs)
-
-        scale = max(float(np.linalg.norm(rhs)), 1e-30)
-        residual = float(np.linalg.norm(k_ff @ v_free - rhs)) / scale
-        # Iterative refinement: the factorisation is reused, so each round is
-        # one cheap triangular solve. Stops early once below the limit.
-        rounds = 0
-        while (
-            np.isfinite(residual)
-            and residual > DIRECT_RESIDUAL_LIMIT
-            and rounds < MAX_REFINEMENT_ROUNDS
-        ):
-            correction = factor.solve(rhs - k_ff @ v_free)
-            v_free = v_free + correction
-            improved = float(np.linalg.norm(k_ff @ v_free - rhs)) / scale
-            rounds += 1
-            if improved >= residual:
-                break  # No progress: the system is genuinely sick.
-            residual = improved
-        solve_seconds = time.perf_counter() - started
+        v_free, report = solve_reduced(k_ff, rhs, policy)
+        factor_seconds = report.factor_seconds
+        solve_seconds = report.solve_seconds
+        residual = report.relative_residual
         voltage[free_index] = v_free
-
-        if not np.isfinite(residual) or residual > DIRECT_RESIDUAL_LIMIT:
-            raise SolverConvergenceError(
-                f"Direct solve residual {residual:.3e} exceeds {DIRECT_RESIDUAL_LIMIT:.0e} "
-                f"after {rounds} refinement rounds; the system is severely ill-conditioned",
-                residual=residual,
-            )
     else:
         residual = 0.0
+        report = LinearReport(
+            backend=DIRECT,
+            preconditioner="none",
+            relative_residual=0.0,
+            iterations=None,
+            converged_reason="no free degrees of freedom",
+            factor_seconds=0.0,
+            solve_seconds=0.0,
+        )
 
     # Net current entering the copper at each Dirichlet DOF: I = (K V)_d minus
     # any explicitly injected current at that DOF.
@@ -186,6 +155,7 @@ def solve_excitation(problem: SheetProblem, excitation: Excitation) -> Solution:
         source_current_a=source_current,
         active_dofs=int(active.sum()),
         factor_seconds=factor_seconds,
+        linear=report,
         solve_seconds=solve_seconds,
     )
 

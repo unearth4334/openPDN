@@ -106,3 +106,41 @@ choice was. This is an Apache-2.0 project that already rejected Triangle
   isolated single processes (ADR-0011); PETSc is used in serial (or threaded)
   mode. Distributing one solve across processes would change the worker model
   and needs its own decision.
+
+## Measured (implementation, 2026-08-16)
+
+The abstraction, the `Auto`/`Direct`/`Iterative` policy, the derived
+tolerance, the diagnostics and the cross-validation gate are implemented. The
+**preconditioner is not the one this ADR chose**, and the difference is
+worth stating precisely.
+
+* **The SPD claim holds, and it was checked rather than assumed.** On a
+  737-DOF board the reduced matrix is symmetric to `1e-18` relative with
+  eigenvalues in `[0.46, 4.4e5]` -- positive definite, so conjugate gradients
+  applies. The condition number there is already `9.5e5`, at only 737 DOFs.
+* **Cross-validation passes decisively** (§8's release gate). Direct and
+  iterative agree on terminal resistance to `1e-14` relative across
+  `287`-`35,976` DOFs, and on the whole potential field, integrated power and
+  conservation to the same order. The backends are interchangeable as far as
+  the physics is concerned.
+* **`petsc4py` and hypre could not be installed or benchmarked**, so the
+  shipped iterative backend uses SciPy's CG with **Jacobi (diagonal)**
+  preconditioning. This makes the path real, testable and cross-validated
+  today; it does not make it scalable.
+* **Jacobi CG does not scale, and the numbers say so.** Iterations run
+  `112, 180, 295, 506, 940` for `287, 737, 2465, 9200, 35976` DOFs -- roughly
+  `sqrt(DOFs)`, exactly the growth an algebraic-multigrid preconditioner
+  exists to remove. Direct solving is also *faster* at every size measurable
+  here (`0.10 s` against `1.51 s` at `35,976` DOFs).
+* **The case for the iterative path is therefore memory, not speed**, and
+  that case is real: the direct factorisation's fill-in rises from `2.6x` the
+  matrix non-zeros at `287` DOFs to `22.5x` at `143,213`, or `189` bytes per
+  DOF climbing to `1,880` and still climbing. Iterative memory is flat by
+  comparison. `AUTO`'s threshold was set to `500,000` DOFs on that basis --
+  a memory guard, deliberately far above the sizes where direct still wins on
+  time, rather than the speed-motivated crossover §5 anticipated.
+* Consequence for §5: until a scalable preconditioner is available, `Auto`
+  choosing iterative is a way to *fit* a problem, never to finish it sooner.
+  The `BYTES_PER_DOF = 1500` estimate in `fem_planner.py` is a reasonable
+  mid-range figure but under-predicts at the top of the measured range
+  (`1,880` at `143k`), which matters for budget refusals on large jobs.

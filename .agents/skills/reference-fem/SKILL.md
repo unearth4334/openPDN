@@ -141,7 +141,18 @@ extension of that pipeline, not a parallel one.
   solved, never how well that system approximates the physics. An iterative
   backend makes this easier to get wrong, so it is worth restating.
 * Direct-vs-iterative cross-validation on the analytical suite is a release
-  gate, not an optional extra.
+  gate, not an optional extra. Measured: the two agree to 1e-14 on terminal
+  resistance across 287-35,976 DOFs.
+* **The shipped iterative backend is not yet scalable, and this is on
+  purpose.** PETSc/hypre could not be installed, so it uses SciPy CG with
+  Jacobi preconditioning: iterations grow as sqrt(DOFs) (112 -> 940 over
+  287 -> 35,976), and direct is *faster* at every size measurable so far.
+  Choose iterative to make a problem **fit**, never to make it finish
+  sooner. AMG is what would change that; until then do not present the
+  iterative path as a speed-up.
+* The reason iterative exists is the direct factorisation's fill-in: 2.6x
+  the matrix non-zeros at 287 DOFs, 22.5x at 143,213 (189 -> 1,880 bytes per
+  DOF, still climbing). Iterative memory is flat.
 
 ## What a Reference result may claim
 
