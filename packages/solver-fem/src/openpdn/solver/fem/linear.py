@@ -218,7 +218,7 @@ def _solve_direct(
 def amg_available() -> bool:
     """Whether the smoothed-aggregation AMG preconditioner can be built."""
     try:
-        import pyamg  # type: ignore[import-untyped]  # noqa: F401
+        import pyamg  # noqa: F401
     except ImportError:
         return False
     return True

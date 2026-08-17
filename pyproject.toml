@@ -33,6 +33,11 @@ dependencies = [
   "numpy>=2.1",
   "pydantic>=2.9",
   "pydantic-settings>=2.6",
+  # Smoothed-aggregation AMG preconditioner for the scalable iterative solve
+  # (ADR-0014). MIT-licensed and wheel-only -- unlike PETSc it needs no
+  # system libraries, so it rides in the default image; linear.py degrades
+  # to Jacobi (and AUTO to direct-only) if it is ever absent.
+  "pyamg>=5.2",
   "python-multipart>=0.0.18",
   "scipy>=1.14",
   "shapely>=2.0",
@@ -179,6 +184,10 @@ files = ["packages", "apps/api/src", "apps/cli/src", "tests"]
 
 # Tests are type-checked, but a test function's `-> None` is noise: the strict
 # annotation requirements apply to the code under test, not to the cases.
+[[tool.mypy.overrides]]
+module = "pyamg"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false

@@ -139,6 +139,8 @@ class TestCheckpointRoundTrip:
         assert loaded is not None
         assert loaded.generations == state.generations
         assert loaded.streak == state.streak
+        assert loaded.field is not None
+        assert state.field is not None
         assert np.array_equal(loaded.field.points, state.field.points)
         assert np.array_equal(loaded.field.sizes, state.field.sizes)
 

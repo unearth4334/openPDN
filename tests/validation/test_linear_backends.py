@@ -100,9 +100,11 @@ def _problem_and_excitation(element_size_m: float):
 
 
 def _resistance(problem, solution) -> float:
-    return abs(
-        solution.voltage_v[problem.source_dofs[_SOURCE]]
-        - solution.voltage_v[problem.load_dofs[_LOAD]]
+    return float(
+        abs(
+            solution.voltage_v[problem.source_dofs[_SOURCE]]
+            - solution.voltage_v[problem.load_dofs[_LOAD]]
+        )
     )
 
 
@@ -187,6 +189,8 @@ class TestIterationScaling:
                 excitation,
                 LinearPolicy(method=ITERATIVE, target_discretisation_error=1e-8),
             )
+            assert solution.linear is not None
+            assert solution.linear.iterations is not None
             counts.append((problem.n_dofs, solution.linear.iterations))
         (small_dofs, small_iters), (large_dofs, large_iters) = counts
         assert large_dofs > small_dofs

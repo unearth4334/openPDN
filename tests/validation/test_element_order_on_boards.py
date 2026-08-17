@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import pytest
 
+from openpdn.domain.board import Board
 from openpdn.domain.provenance import Quantity
 from openpdn.domain.study import (
     AnalysisStudy,
@@ -48,7 +49,7 @@ _WIDTH_M = 1e-3
 _TEST_CURRENT_A = 1.0
 
 
-def _board():
+def _board() -> Board:
     return straight_trace_board(length_between_pads_m=_LENGTH_M, width_m=_WIDTH_M)
 
 

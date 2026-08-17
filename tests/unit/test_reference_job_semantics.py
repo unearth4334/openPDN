@@ -226,7 +226,7 @@ class TestServerSideCeilings:
             max_reference_dofs=100_000,
         )
 
-    def _service(self):
+    def _service(self) -> SimulationService:
         service = SimulationService.__new__(SimulationService)
         service._limits = self._limits()
         return service
@@ -260,6 +260,7 @@ class TestServerSideCeilings:
         draft = self._draft(max_passes=99)
         with pytest.raises(SimulationRequestError):
             self._service()._enforce_reference_ceilings(draft)
+        assert draft.reference_policy is not None
         assert draft.reference_policy.max_passes == 99  # untouched
 
     def test_a_non_adaptive_draft_is_unaffected(self):

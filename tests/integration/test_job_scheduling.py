@@ -185,7 +185,9 @@ class TestSchemaMigration:
         assert "priority" in columns
         # And the upgraded store is usable.
         _enqueue(store, "after-migration", AccuracyProfile.STANDARD, 100.0)
-        assert store.claim_next("worker-1", 60.0).spec.job_id == "after-migration"
+        claimed = store.claim_next("worker-1", 60.0)
+        assert claimed is not None
+        assert claimed.spec.job_id == "after-migration"
 
     def test_opening_an_existing_store_twice_is_harmless(self, tmp_path):
         path = tmp_path / "jobs.sqlite"
