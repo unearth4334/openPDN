@@ -10,10 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+import numpy as np
+from scipy.spatial import cKDTree
+
 from openpdn.domain.study import ElementOrder
 from openpdn.domain.units import METRE
 
 if TYPE_CHECKING:
+    import numpy.typing as npt
+
     from openpdn.domain.study import MeshSettings
 
 #: Fraction of the target element size used when a study supplies no explicit
@@ -65,6 +70,62 @@ MANDATORY_BOUNDARY_DEDUP_FRACTION: Final = 0.2
 MAX_POINTS_PER_REGION: Final = 2_000_000
 
 
+class RefinementField:
+    """An error-driven upper bound on element size, from a previous solve.
+
+    Adaptive refinement here re-meshes from a modified sizing field rather
+    than subdividing triangles, because the mesher has no edge adjacency or
+    hanging-node support to subdivide *into* (ADR-0013 §1). This is the
+    modification: a set of seed points, each demanding a size, that the
+    mesher takes as an additional cap alongside its width and clearance
+    grading.
+
+    The size demanded at an arbitrary point is `min_j (s_j + growth * d_j)`
+    -- deliberately the same "grow away from a refined seed" law the mesher
+    already applies to boundary points, so a refined patch blends into the
+    surrounding field instead of ending in a cliff that would produce
+    stretched triangles at its rim.
+    """
+
+    def __init__(self, points: npt.NDArray[np.float64], sizes: npt.NDArray[np.float64]) -> None:
+        """Build the lookup tree over the seed points."""
+        self.points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        self.sizes = np.asarray(sizes, dtype=np.float64).reshape(-1)
+        if len(self.points) != len(self.sizes):
+            raise ValueError("Refinement field needs one size per point")
+        self._tree = cKDTree(self.points) if len(self.points) else None
+
+    def __len__(self) -> int:
+        """Number of seed points."""
+        return len(self.points)
+
+    def target_at(
+        self,
+        query: npt.NDArray[np.float64],
+        growth_rate: float,
+        cap_m: float,
+    ) -> npt.NDArray[np.float64]:
+        """Size demanded at each `(k, 2)` query point, capped at `cap_m`."""
+        out = np.full(len(query), cap_m, dtype=np.float64)
+        if self._tree is None or len(query) == 0:
+            return out
+        # Eight neighbours: the minimiser is usually the nearest seed, but a
+        # slightly further seed demanding a much smaller size can win, and
+        # taking only the nearest would miss it.
+        neighbours = min(8, len(self.points))
+        raw_distances, raw_indices = self._tree.query(query, k=neighbours)
+        distances = np.asarray(raw_distances, dtype=np.float64).reshape(len(query), neighbours)
+        indices = np.asarray(raw_indices, dtype=np.int64).reshape(len(query), neighbours)
+        demanded = (self.sizes[indices] + growth_rate * distances).min(axis=1)
+        result: npt.NDArray[np.float64] = np.minimum(out, demanded)
+        return result
+
+    @property
+    def finest_m(self) -> float:
+        """Smallest size any seed demands, or infinity when empty."""
+        return float(self.sizes.min()) if len(self.sizes) else float("inf")
+
+
 @dataclass(frozen=True, slots=True)
 class MeshControls:
     """Concrete sizing numbers derived from a study's `MeshSettings`.
@@ -78,6 +139,8 @@ class MeshControls:
         element_order: Basis order. It does not affect the triangulation at
             all -- the mesher produces the same triangles either way, and the
             order decides how many nodes each of them carries (ADR-0012).
+        refinement: Error-driven size cap from the previous adaptive pass,
+            or None for a first (non-adaptive) mesh.
     """
 
     max_size_m: float
@@ -86,6 +149,8 @@ class MeshControls:
     growth_rate: float
     refine_terminals: bool
     element_order: ElementOrder = ElementOrder.P1
+    #: Optional error-driven size cap from a previous adaptive pass.
+    refinement: RefinementField | None = None
 
     @classmethod
     def from_settings(cls, settings: MeshSettings) -> MeshControls:

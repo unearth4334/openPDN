@@ -104,7 +104,22 @@ extension of that pipeline, not a parallel one.
   electrical activity.
 * **Stopping is a conjunction**: QoI change *and* estimated error *and* linear
   solve validity *and* current balance *and* energy balance. One metric alone
-  is not a stopping rule.
+  is not a stopping rule. This is not theoretical: an implementation that
+  stopped on QoI change plus conservation alone declared convergence on two
+  non-nested meshes that happened to agree. Requiring the estimator to have
+  actually fallen, plus a confirmation count, is what tells re-meshing noise
+  apart from convergence.
+* **Know when adaptivity is the wrong tool.** Measured: it wins big on a
+  plane-neck-plane board (error in the neck, copper in the planes) and does
+  *not* beat uniform refinement on a series-widths board, where total
+  resistance is spread along the whole path. Adaptivity pays when error and
+  copper are in different places. Reaching for it on a board where they are
+  not is wasted compute, not a bug to chase.
+* **Re-meshing noise is the floor on any convergence claim.** Successive
+  meshes are non-nested, and re-meshing alone moves terminal resistance by a
+  few parts per thousand. Do not assert monotone error decrease that the
+  mesher cannot deliver; assert bands, and verify monotonicity before
+  extrapolating anything.
 
 ## Linear solving
 

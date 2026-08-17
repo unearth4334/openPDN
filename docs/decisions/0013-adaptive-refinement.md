@@ -137,3 +137,30 @@ an error estimator can drive.
   acceptance is a measured table showing adaptive refinement reaching a given
   terminal-resistance error at substantially fewer DOFs than uniform
   refinement on the same board.
+
+## Measured (implementation, 2026-08-16)
+
+* **Adaptivity pays only when error and copper are in different places.** On
+  `plane_neck_plane_board` (two planes joined by a narrow neck) adaptive
+  refinement reaches the reference band at `413` DOFs where global refinement
+  is still `4.7e-3` off at `2465` DOFs -- a clear win, because shrinking the
+  global element size floods two large planes that barely affect the answer.
+  On `series_widths_board` it does **not** beat uniform: total resistance is
+  spread along the whole conduction path, the estimator points at the
+  reentrant corner, and refining the corner barely moves the answer. Neither
+  result is a defect; together they say *when* to reach for this tier.
+* **Re-meshing noise bounds every convergence claim built on this.** The
+  meshes between generations are not nested (§1), and re-meshing alone moves
+  the reported resistance by a few parts per thousand: both the adaptive and
+  the uniform sequences oscillate rather than decreasing monotonically, and
+  the finest uniform mesh -- the reference -- carries that same uncertainty.
+  Convergence assertions are therefore written against bands. This is the
+  measured form of the non-nested consequence noted above, and it is why
+  ADR-0015 §6 requires an extrapolation to *verify* monotonicity rather than
+  assume it.
+* **The stopping rule needs the estimator, not just the quantity of
+  interest.** A first implementation stopped on QoI change plus conservation
+  alone and declared convergence on two successive meshes that happened to
+  agree -- re-meshing noise, not error reduction. §8's estimator criterion is
+  what distinguishes them, and a confirmation count was added on top: one
+  quiet pass is not evidence when the mesh sequence is non-nested.

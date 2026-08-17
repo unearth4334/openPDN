@@ -339,6 +339,51 @@ def via_stack_board(
     )
 
 
+def plane_neck_plane_board(
+    *,
+    plane_side_m: float = 8e-3,
+    neck_width_m: float = 0.2e-3,
+    neck_length_m: float = 2e-3,
+    pad_length_m: float = 0.5e-3,
+) -> Board:
+    """Two square planes joined by a narrow neck, terminals at the far edges.
+
+    Deliberately built so error and copper live in *different* places: almost
+    all of the resistance is in the neck, and almost all of the area is not.
+    Shrinking the global element size to resolve the neck floods both planes
+    with elements that change the answer very little, which is precisely the
+    waste adaptive refinement exists to avoid -- so this is the board that
+    can tell whether adaptivity actually pays (ADR-0013).
+    """
+    total = 2.0 * plane_side_m + neck_length_m
+    pad_a, term_a = rect_pad_terminal("a", "L1", 0.0, 0.0, pad_length_m, plane_side_m)
+    pad_b, term_b = rect_pad_terminal(
+        "b", "L1", total - pad_length_m, 0.0, pad_length_m, plane_side_m
+    )
+    return Board(
+        id=BoardId("val-neck"),
+        name="validation plane-neck-plane",
+        stackup=Stackup((conductive_layer("L1", 0),)),
+        nets=(Net(id=NET, name="DUT"),),
+        copper_regions=(
+            rect_region("left", "L1", 0.0, 0.0, plane_side_m, plane_side_m),
+            rect_region(
+                "neck",
+                "L1",
+                plane_side_m,
+                (plane_side_m - neck_width_m) / 2.0,
+                neck_length_m,
+                neck_width_m,
+            ),
+            rect_region(
+                "right", "L1", plane_side_m + neck_length_m, 0.0, plane_side_m, plane_side_m
+            ),
+        ),
+        pads=(pad_a, pad_b),
+        terminals=(term_a, term_b),
+    )
+
+
 def disconnected_islands_board() -> Board:
     """Two copper islands of the same net with no conductive path between."""
     pad_a, term_a = rect_pad_terminal("a", "L1", 0.0, 0.0, 1e-3, 1e-3)

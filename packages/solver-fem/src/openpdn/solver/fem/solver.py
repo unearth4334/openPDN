@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -37,7 +37,7 @@ from openpdn.solver.api import (
     SolverConfigurationError,
     SolverDescriptor,
 )
-from openpdn.solver.fem.controls import MeshControls
+from openpdn.solver.fem.controls import MeshControls, RefinementField
 from openpdn.solver.fem.post import (
     ConservationReport,
     ElementFields,
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
     from openpdn.domain.board import Board
     from openpdn.domain.study import AnalysisStudy, AttachmentGroup
-    from openpdn.geometry.api import GeometryNormalizer
+    from openpdn.geometry.api import GeometryNormalizer, NormalizedGeometry
 
 SOLVER_NAME: Final = "fem-2p5d"
 SOLVER_VERSION: Final = "0.1.0"
@@ -154,6 +154,34 @@ class FemSheetSolver:
         normalized = self._normalizer.normalize(board)
         controls = _controls_for(board, study)
         return build_problem(board, study, normalized, controls)
+
+
+def solve_with_controls(
+    board: Board,
+    study: AnalysisStudy,
+    normalized: NormalizedGeometry,
+    refinement: RefinementField | None = None,
+) -> tuple[ElectricalAnalysisResult, FemFieldData, SheetProblem]:
+    """Solve with an explicit refinement field, returning the problem too.
+
+    The adaptive loop (`adaptive.py`) needs three things the public
+    `solve_with_fields` does not expose: control over the sizing field
+    between passes, the already-normalised geometry reused across passes
+    (it cannot change under refinement), and the assembled problem, which is
+    what the error estimator reads. Kept here rather than in `adaptive` so
+    the excitation and result-building logic has exactly one implementation.
+    """
+    study.validate_against(board)
+    controls = _controls_for(board, study)
+    if refinement is not None:
+        controls = replace(controls, refinement=refinement)
+    started = time.perf_counter()
+    problem = build_problem(board, study, normalized, controls)
+    assembly_seconds = time.perf_counter() - started
+    result, field_data = _solve_prepared(
+        problem, board, study, assembly_seconds, cache_hit=False
+    )
+    return result, field_data, problem
 
 
 @dataclass(frozen=True)

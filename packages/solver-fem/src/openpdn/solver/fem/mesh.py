@@ -283,7 +283,17 @@ def _sample_ring(
         # nearest other arm of this polygon, so Delaunay edges cannot bridge
         # the slot (their empty circumcircles would contain the dense flank).
         size = min(inward / k, outward / 2.0, controls.max_size_m)
-        pilot_sizes[i] = max(size, controls.min_size_m)
+        pilot_sizes[i] = size
+    if controls.refinement is not None:
+        # The error-driven cap composes with width/clearance grading by
+        # taking whichever demands the smaller element -- refinement may
+        # only ever add resolution, never coarsen a feature the geometry
+        # already resolved (ADR-0013 §7).
+        pilot_sizes = np.minimum(
+            pilot_sizes,
+            controls.refinement.target_at(pilot_xy, controls.growth_rate, controls.max_size_m),
+        )
+    pilot_sizes = np.maximum(pilot_sizes, controls.min_size_m)
 
     # Placement pass: walk the ring, stepping by the locally measured size.
     keep_all_vertices = perimeter <= SMALL_RING_PERIMETER_IN_SIZES * controls.max_size_m
@@ -406,6 +416,11 @@ def _interior_lattice(
     tree = cKDTree(boundary_points)
     min_x, min_y, max_x, max_y = polygon.bounds
     finest_needed = float(boundary_sizes.min())
+    if controls.refinement is not None:
+        # Without this the level loop would never generate lattices fine
+        # enough to honour an interior refinement seed that sits away from
+        # any boundary.
+        finest_needed = min(finest_needed, controls.refinement.finest_m)
     chosen: list[npt.NDArray[np.float64]] = []
     for level in _size_levels(controls, finest_needed):
         if level >= controls.max_size_m:
@@ -414,6 +429,10 @@ def _interior_lattice(
             # Only boundary points refined below 2*level can pull the local
             # target under 2*level, and only within the growth radius.
             demanding = boundary_points[boundary_sizes < 2.0 * level]
+            if controls.refinement is not None:
+                seeds = controls.refinement.points[controls.refinement.sizes < 2.0 * level]
+                if len(seeds):
+                    demanding = np.vstack([demanding, seeds]) if len(demanding) else seeds
             if len(demanding) == 0:
                 continue
             radius = 2.0 * level / controls.growth_rate
@@ -429,6 +448,13 @@ def _interior_lattice(
             boundary_sizes[nearest] + controls.growth_rate * distances,
             controls.max_size_m,
         )
+        if controls.refinement is not None:
+            target = np.minimum(
+                target,
+                controls.refinement.target_at(
+                    candidates, controls.growth_rate, controls.max_size_m
+                ),
+            )
         clear = distances >= INTERIOR_BOUNDARY_CLEARANCE * level
         wanted = (target >= level) & (target < 2.0 * level) & clear
         chosen.append(candidates[wanted])
