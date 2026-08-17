@@ -14,18 +14,20 @@ the direct solve, and what each backend cost):
     9,200           506        3.6e-13      0.017 s     0.027 s
     35,976          940        2.2e-14      0.100 s     1.513 s
 
-Two things worth stating plainly, because they shape when the iterative path
-should be chosen at all:
+Two eras of measurement, both preserved because together they justify the
+current `AUTO` policy:
 
-* **Agreement is excellent** -- fourteen digits, everywhere. The backends
-  are interchangeable as far as the physics is concerned.
-* **Jacobi-preconditioned CG does not scale.** Iteration count tracks
-  `sqrt(DOFs)` (112 -> 940 as DOFs go 287 -> 35,976), which is exactly the
-  behaviour algebraic multigrid exists to remove, and direct solving is
-  faster at every size measurable here. Until a scalable preconditioner is
-  available, the iterative backend is a correctness-validated *memory*
-  fallback, not a performance win -- which is why `AUTO` keeps preferring
-  direct well past the sizes above.
+* **Jacobi (fallback)**: iterations track `sqrt(DOFs)` (112 -> 940 over
+  287 -> 35,976 DOFs) and at 2.24M DOFs it exhausted its budget at residual
+  4.2e-3 -- so without AMG, `AUTO` must mean direct.
+* **Smoothed-aggregation AMG (pyamg)**: iterations near mesh-independent
+  (13 at 36k, 29 at 143k, 39 at 571k DOFs), and wall time crosses direct
+  between 143k (direct 1.53 s vs 2.10 s) and 571k (direct 19.0 s vs
+  3.0 s) -- the measured basis of `AUTO_DIRECT_MAX_DOFS = 200,000`.
+
+Agreement with the direct solve is better than 1e-9 relative on every
+quantity checked, under either preconditioner. The backends are
+interchangeable as far as the physics is concerned; only cost differs.
 """
 
 from __future__ import annotations
@@ -174,13 +176,12 @@ class TestReportedDiagnostics:
 
 
 class TestIterationScaling:
-    def test_iteration_count_grows_with_problem_size(self):
-        # Documents the measured non-scalability of Jacobi preconditioning:
-        # iterations track sqrt(DOFs). This is the empirical case for an
-        # algebraic-multigrid preconditioner, and it is why the iterative
-        # backend is not yet a performance win. If a future preconditioner
-        # makes this flat, that is a success and this test should be
-        # revisited deliberately.
+    def test_iteration_growth_stays_gentle(self):
+        # With AMG the iteration count is near mesh-independent (it still
+        # creeps: 13 -> 29 -> 39 over 36k -> 571k DOFs); with the Jacobi
+        # fallback it grows as sqrt(DOFs). The bound below holds for AMG
+        # and would fail loudly if the preconditioner silently degraded to
+        # something with sqrt growth at these sizes.
         counts = []
         for element_size_m in (1.0e-3, 0.25e-3):
             problem, excitation = _problem_and_excitation(element_size_m)
@@ -192,4 +193,11 @@ class TestIterationScaling:
             counts.append((problem.n_dofs, solution.linear.iterations))
         (small_dofs, small_iters), (large_dofs, large_iters) = counts
         assert large_dofs > small_dofs
-        assert large_iters > small_iters
+        from openpdn.solver.fem.linear import amg_available
+
+        if amg_available():
+            # 287 -> 2,465 DOFs is ~9x; sqrt growth would be ~3x iterations.
+            # AMG stays well under that.
+            assert large_iters <= max(3 * small_iters, 40)
+        else:
+            assert large_iters > small_iters

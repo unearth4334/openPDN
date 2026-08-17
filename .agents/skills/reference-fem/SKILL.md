@@ -149,18 +149,18 @@ extension of that pipeline, not a parallel one.
 * Direct-vs-iterative cross-validation on the analytical suite is a release
   gate, not an optional extra. Measured: the two agree to 1e-14 on terminal
   resistance across 287-35,976 DOFs.
-* **The shipped iterative backend is not yet scalable, and this is on
-  purpose.** PETSc/hypre could not be installed, so it uses SciPy CG with
-  Jacobi preconditioning: iterations grow as sqrt(DOFs) (112 -> 940 over
-  287 -> 35,976), and direct is *faster* at every size measurable so far.
-  Choose iterative to make a problem **fit**, never to make it finish
-  sooner. AMG is what would change that; until then do not present the
-  iterative path as a speed-up. Measured consequence: at 2.24M DOFs
-  Jacobi-CG exhausted 5,000 iterations at residual 4.2e-3 and refused,
-  where direct solved the same system in 257 s / 11.25 GiB -- so `AUTO`
-  deliberately means direct until AMG lands. Do not lower
-  `AUTO_DIRECT_MAX_DOFS` back without a preconditioner that makes
-  iteration counts mesh-independent.
+* **The iterative backend is scalable now, via pyamg smoothed-aggregation
+  AMG** (PETSc+hypre remains unbuildable here; swapping to it later is a
+  preconditioner change behind the same report fields). Measured: AMG
+  iterations are near mesh-independent (13 -> 42 over 36k -> 2.28M DOFs),
+  and the 2.28M-DOF system Jacobi-CG could not solve at all runs in 12.9 s
+  / 3.16 GiB against direct's 256.5 s / 11.25 GiB. `AUTO` crosses to
+  iterative at 200k DOFs -- **only when AMG is available**: with the Jacobi
+  fallback (iterations grow as sqrt(DOFs); 112 -> 940 over 287 -> 36k;
+  outright non-convergence at 2.24M) `AUTO` means direct, because routing
+  to a backend that predictably cannot converge turns feasible jobs into
+  guaranteed failures. Do not change either behaviour without re-measuring
+  both curves.
 * The reason iterative exists is the direct factorisation's fill-in: 2.6x
   the matrix non-zeros at 287 DOFs, 22.5x at 143,213 (189 -> 1,880 bytes per
   DOF, still climbing). Iterative memory is flat.

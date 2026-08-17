@@ -144,8 +144,35 @@ worth stating precisely.
   exhausted its 5,000-iteration budget at residual `4.2e-3` and refused --
   correct behaviour per §6, but `AUTO` had turned a feasible job into a
   guaranteed failure, since the direct solve handles the same system in
-  257 s within 11.25 GiB. **`AUTO` therefore means direct until an AMG
-  preconditioner exists**; `iterative` stays as an explicit opt-in. That
-  2.28M-DOF direct solve also re-based the memory estimate: peak process
-  RSS (~5,300 bytes/DOF, what the OOM killer acts on) rather than factor
-  storage (~1,880 at 143k) now sets `BYTES_PER_DOF = 5000`.
+  257 s within 11.25 GiB. That 2.28M-DOF direct solve also re-based the
+  memory estimate: peak process RSS (~5,300 bytes/DOF, what the OOM killer
+  acts on) rather than factor storage (~1,880 at 143k) now sets
+  `BYTES_PER_DOF = 5000`.
+
+## Measured again (AMG lands, 2026-08-16)
+
+`petsc4py` remains unbuildable here, but **pyamg** (MIT, wheel-only, no
+system libraries) is not -- it is now a runtime dependency providing
+smoothed-aggregation AMG, with `linear.py` degrading to Jacobi and `AUTO`
+to direct-only if it is ever absent. This delivers §1's actual choice --
+CG with algebraic multigrid -- through an interim library; moving to
+PETSc+hypre later is a preconditioner swap behind the same report fields.
+
+The theory §1 relied on materialised in the measurements:
+
+    DOFs        direct       AMG-CG      AMG iters   Jacobi iters
+    35,976      0.10 s       0.91 s          13           940
+    143,237     1.53 s       2.10 s          29            --
+    571,557    19.02 s       3.02 s          39            --
+    2,279,489  256.5 s      12.9 s           42         failed
+
+* Iteration count is near mesh-independent (13 -> 42 over a 63x DOF range)
+  -- the property the whole backend was designed around.
+* The 2.28M-DOF system Jacobi could not solve at all runs in `12.9 s` at
+  `3.16 GiB` peak RSS against direct's `256.5 s` / `11.25 GiB` -- 20x the
+  speed at 3.6x less memory, agreeing with direct to every printed digit.
+* `AUTO`'s crossover is therefore real and measured: direct wall time grows
+  superlinearly, AMG's roughly linearly, and the curves cross between 143k
+  and 571k DOFs. `AUTO_DIRECT_MAX_DOFS = 200,000`, applied only when AMG is
+  available; below it direct still buys determinism and factorisation
+  reuse.

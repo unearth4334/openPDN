@@ -192,6 +192,7 @@ function ReferenceConvergence({
       <p className={reference.converged ? "sim-note" : "sim-error"}>
         {reference.converged ? `Converged (${quality})` : `NOT a converged result: ${quality}`}
       </p>
+      <ConvergencePlot generations={reference.generations} />
       <table className="data-table" aria-label="Adaptive generations">
         <thead>
           <tr>
@@ -218,6 +219,12 @@ function ReferenceConvergence({
           ))}
         </tbody>
       </table>
+      {reference.generations.some((generation) => (generation.floor_clamped_seeds ?? 0) > 0) ? (
+        <p className="sim-note">
+          Refinement reached the geometry-precision floor: further accuracy is limited by the
+          imported geometry’s own fidelity, not by compute.
+        </p>
+      ) : null}
       <ul className="result-warnings">
         {reference.quantities.map((quantity) => (
           <li key={quantity.name}>
@@ -233,6 +240,70 @@ function ReferenceConvergence({
         ))}
       </ul>
     </>
+  );
+}
+
+/**
+ * QoI and estimated error against DOFs, log-x -- the picture that makes an
+ * asymptotic plateau (or its absence) visible at a glance. Pure inline SVG:
+ * a handful of points per run does not justify a charting dependency.
+ */
+function ConvergencePlot({
+  generations,
+}: {
+  generations: NonNullable<ResultMetrics["reference"]>["generations"];
+}) {
+  const first = generations[0];
+  const last = generations[generations.length - 1];
+  if (generations.length < 2 || first === undefined || last === undefined) {
+    return null;
+  }
+  const width = 260;
+  const height = 120;
+  const pad = { left: 8, right: 8, top: 10, bottom: 16 };
+  const xs = generations.map((g) => Math.log10(Math.max(g.dofs, 1)));
+  const xMin = Math.min(...xs);
+  const xSpan = Math.max(Math.max(...xs) - xMin, 1e-9);
+  const toX = (x: number) => pad.left + ((x - xMin) / xSpan) * (width - pad.left - pad.right);
+
+  const qois = generations.map((g) => g.quantity_of_interest);
+  const qMin = Math.min(...qois);
+  const qSpan = Math.max(Math.max(...qois) - qMin, Math.abs(qMin) * 1e-9 + 1e-30);
+  const errs = generations.map((g) => Math.log10(Math.max(g.estimated_error, 1e-30)));
+  const eMin = Math.min(...errs);
+  const eSpan = Math.max(Math.max(...errs) - eMin, 1e-9);
+  const innerH = height - pad.top - pad.bottom;
+  const toYq = (v: number) => pad.top + (1 - (v - qMin) / qSpan) * innerH;
+  const toYe = (v: number) => pad.top + (1 - (v - eMin) / eSpan) * innerH;
+
+  const line = (ys: number[]) =>
+    generations.map((_, i) => `${toX(xs[i] ?? 0).toFixed(1)},${(ys[i] ?? 0).toFixed(1)}`).join(" ");
+  const qLine = line(qois.map(toYq));
+  const eLine = line(errs.map(toYe));
+
+  return (
+    <svg
+      className="reference-plot"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="Quantity of interest and estimated error versus degrees of freedom"
+    >
+      <polyline points={eLine} fill="none" stroke="var(--accent-warning, #c80)" strokeWidth="1.5" />
+      <polyline points={qLine} fill="none" stroke="var(--accent, #07c)" strokeWidth="1.5" />
+      {generations.map((g, i) => (
+        <circle
+          key={g.index}
+          cx={toX(xs[i] ?? 0)}
+          cy={toYq(qois[i] ?? 0)}
+          r="2.5"
+          fill="var(--accent, #07c)"
+        />
+      ))}
+      <text x={pad.left} y={height - 3} className="reference-plot__label">
+        DOFs {first.dofs.toLocaleString()} → {last.dofs.toLocaleString()} (log) — QoI (blue) / est.
+        error (amber, log)
+      </text>
+    </svg>
   );
 }
 

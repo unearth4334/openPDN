@@ -281,6 +281,51 @@ class TestInlineReference:
         assert history is None
 
 
+class TestGeometryPrecisionFloor:
+    def test_refinement_never_demands_sizes_below_the_floor(self):
+        # An aggressive policy on a coarse mesh would otherwise chase the
+        # corner singularity down to nanometre seeds -- "resolving" the
+        # import tessellation rather than the copper.
+        board = plane_neck_plane_board()
+        floor_m = 50e-6  # deliberately high so the clamp must engage
+        outcome = solve_adaptive(
+            board,
+            _study(),
+            ShapelyGeometryNormalizer(),
+            AdaptivePolicy(
+                target_qoi_rel_change=1e-12,
+                max_passes=5,
+                max_dofs=400_000,
+                refinement_ratio=8.0,
+                min_element_m=floor_m,
+            ),
+        )
+        assert any(g.floor_clamped_seeds > 0 for g in outcome.generations)
+
+    def test_clamped_seeds_are_recorded_per_generation(self, store):
+        # The count travels through the checkpoint too, so a resumed run
+        # keeps reporting the limitation it already discovered.
+        board = plane_neck_plane_board()
+        captured: list[AdaptiveResume] = []
+        solve_adaptive(
+            board,
+            _study(),
+            ShapelyGeometryNormalizer(),
+            AdaptivePolicy(
+                target_qoi_rel_change=1e-12,
+                max_passes=3,
+                max_dofs=400_000,
+                refinement_ratio=8.0,
+                min_element_m=50e-6,
+            ),
+            on_generation=captured.append,
+        )
+        _save_checkpoint(store, _spec(), captured[-1])
+        loaded = _load_checkpoint(store, _spec())
+        assert loaded is not None
+        assert any(g.floor_clamped_seeds > 0 for g in loaded.generations)
+
+
 class TestCheckpointFileFormat:
     def test_the_stored_form_is_plain_versioned_json(self, store, four_pass_run):
         # No pickles, ever: persisted state is data. A version field is what

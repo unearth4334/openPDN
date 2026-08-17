@@ -87,7 +87,9 @@ class TestSolveAndRefusal:
         _, report = solve_reduced(matrix, np.ones(40), LinearPolicy(method=ITERATIVE))
         assert report.iterations is not None
         assert report.iterations > 0
-        assert report.preconditioner == "jacobi"
+        # Best-available preconditioner: AMG when pyamg is installed,
+        # Jacobi otherwise. Either way the report names what actually ran.
+        assert report.preconditioner in {"pyamg-smoothed-aggregation", "jacobi"}
 
     def test_the_direct_backend_reports_no_iterations(self):
         _, report = solve_reduced(_spd_matrix(), np.ones(40), LinearPolicy(method=DIRECT))

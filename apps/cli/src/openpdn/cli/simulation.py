@@ -390,6 +390,13 @@ def _print_reference_history(reference: dict[str, Any]) -> None:
             f"{generation['marked_elements']:>8}"
         )
     print(f"status: {reference['status']}")
+    clamped = sum(g.get("floor_clamped_seeds", 0) for g in reference["generations"])
+    if clamped:
+        print(
+            f"note: {clamped} refinement seed(s) hit the geometry-precision "
+            "floor -- further accuracy is limited by the imported geometry's "
+            "own fidelity, not by compute"
+        )
     for quantity in reference["quantities"]:
         detail = ""
         if quantity["singular"]:

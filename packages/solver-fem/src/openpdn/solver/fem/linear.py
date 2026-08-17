@@ -56,29 +56,26 @@ DIRECT_RESIDUAL_LIMIT: Final = 1e-6
 #: solve and typically recovers several digits.
 MAX_REFINEMENT_ROUNDS: Final = 3
 
-#: DOF count above which `AUTO` prefers the iterative backend.
+#: DOF count above which `AUTO` prefers the iterative backend -- **when an
+#: AMG preconditioner is available** (`resolve` checks; without one, `AUTO`
+#: always means direct, because Jacobi-CG was measured *unable* to converge
+#: at 2.24M DOFs, exhausting 5,000 iterations at residual 4.2e-3).
 #:
-#: Effectively disabled while the only preconditioner is Jacobi, and the
-#: number that disabled it is measured, not argued. A first threshold of
-#: 500,000 routed a 2,244,650-DOF solve to Jacobi-CG, which exhausted its
-#: 5,000-iteration budget at a relative residual of 4.2e-3 and -- correctly
-#: -- refused (ADR-0014 §6). The direct solve handles the same system in
-#: under two minutes within this machine's memory. Iteration count grows as
-#: sqrt(kappa) and kappa grows under refinement, so above the old threshold
-#: Jacobi-CG predictably *cannot* converge at tight tolerances: `AUTO` was
-#: turning feasible jobs into guaranteed failures, which is worse than
-#: either backend's honest limits.
+#: The crossover is measured, on `plane_neck_plane_board` with
+#: smoothed-aggregation AMG (setup + solve wall time, matched answers to
+#: better than 1e-9 relative):
 #:
-#: The crossover becomes real when an AMG preconditioner (ADR-0014's actual
-#: choice, environment-blocked at implementation time) makes iteration
-#: counts mesh-independent. Until then `AUTO` means direct, and `iterative`
-#: remains an explicit opt-in for memory-bound cases whose derived tolerance
-#: is loose enough for Jacobi to reach.
+#:     DOFs        direct     AMG-CG    AMG iterations
+#:     35,976      0.10 s     0.91 s          13
+#:     143,237     1.53 s     2.10 s          29
+#:     571,557    19.02 s     3.02 s          39
 #:
-#: The memory case for iterative is unchanged and still measured -- direct
-#: fill-in rises from 2.6x matrix non-zeros at 287 DOFs to 22.5x at 143,213
-#: (189 -> 1,880 bytes/DOF, still climbing) while CG memory is flat.
-AUTO_DIRECT_MAX_DOFS: Final = 100_000_000
+#: Direct wall time grows superlinearly (fill-in), AMG's roughly linearly
+#: with a near-mesh-independent iteration count -- so the curves cross
+#: between the last two rows, at roughly this many DOFs. Below it, direct
+#: additionally buys determinism and factorisation reuse across
+#: excitations.
+AUTO_DIRECT_MAX_DOFS: Final = 200_000
 
 #: Fraction of the target discretisation error the linear solve is allowed to
 #: contribute. ADR-0014 §6: the linear algebra must never be the
@@ -111,9 +108,18 @@ class LinearPolicy:
         )
 
     def resolve(self, n_free: int) -> str:
-        """Which backend `AUTO` selects for a problem of this size."""
+        """Which backend `AUTO` selects for a problem of this size.
+
+        The crossover only exists when an AMG preconditioner does: with the
+        Jacobi fallback, iterative CG cannot reach tight tolerances on large
+        systems at all, and routing there turns feasible jobs into
+        guaranteed failures. An explicit `iterative` request is honoured
+        either way -- and refuses honestly if it cannot converge.
+        """
         if self.method != AUTO:
             return self.method
+        if not amg_available():
+            return DIRECT
         return DIRECT if n_free <= self.auto_direct_max_dofs else ITERATIVE
 
 
@@ -209,18 +215,38 @@ def _solve_direct(
     )
 
 
-def _jacobi_preconditioner(matrix: sp.csc_matrix) -> tuple[LinearOperator, str]:
-    """Diagonal (Jacobi) preconditioning.
+def amg_available() -> bool:
+    """Whether the smoothed-aggregation AMG preconditioner can be built."""
+    try:
+        import pyamg  # type: ignore[import-untyped]  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
-    Chosen because it is dependency-free and always available. It is
-    emphatically **not** the preconditioner ADR-0014 selected: that is
-    algebraic multigrid via hypre, whose iteration count is near
-    mesh-independent. Jacobi's is not -- unpreconditioned or diagonally
-    preconditioned CG needs iterations growing like `sqrt(kappa)`, and
-    `kappa` for this operator grows as the mesh refines (measured: `9.5e5`
-    at only 737 DOFs). Jacobi therefore makes the iterative path *usable and
-    testable* today without making it *scalable*; AMG is what would.
+
+def _build_preconditioner(matrix: sp.csc_matrix) -> tuple[LinearOperator, str]:
+    """Best available preconditioner for the SPD conduction operator.
+
+    Preference order, and why it is an order rather than a choice:
+
+    * **Smoothed-aggregation AMG** (pyamg, MIT-licensed, wheel-only). The
+      operator is a scalar elliptic diffusion problem on an unstructured
+      mesh -- the class AMG was built for, where its iteration count is
+      near mesh-independent. ADR-0014 chose AMG via PETSc+hypre; pyamg is
+      the interim that needs no system libraries, and the report records
+      which one actually ran.
+    * **Jacobi** (diagonal), dependency-free fallback. Measured to *not*
+      scale: iterations grow as `sqrt(kappa)`, and at 2.24M DOFs it
+      exhausted its budget at residual 4.2e-3. A solve that falls back here
+      still refuses honestly on non-convergence; it just refuses sooner.
     """
+    if amg_available():
+        import pyamg
+
+        hierarchy = pyamg.smoothed_aggregation_solver(
+            sp.csr_matrix(matrix), max_coarse=300
+        )
+        return hierarchy.aspreconditioner(cycle="V"), "pyamg-smoothed-aggregation"
     diagonal = matrix.diagonal().astype(np.float64)
     safe = np.where(np.abs(diagonal) > 0.0, diagonal, 1.0)
     inverse = 1.0 / safe
@@ -237,7 +263,7 @@ def _solve_iterative(
 ) -> tuple[npt.NDArray[np.float64], LinearReport]:
     """Preconditioned conjugate gradients on the SPD reduced system."""
     started = time.perf_counter()
-    preconditioner, name = _jacobi_preconditioner(matrix)
+    preconditioner, name = _build_preconditioner(matrix)
     factor_seconds = time.perf_counter() - started
 
     tolerance = policy.relative_tolerance()

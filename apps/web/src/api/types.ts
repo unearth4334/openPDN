@@ -437,6 +437,7 @@ export interface ResultMetrics {
       estimated_error: number;
       marked_elements: number;
       quantities: Record<string, number>;
+      floor_clamped_seeds?: number;
     }[];
     quantities: {
       name: string;

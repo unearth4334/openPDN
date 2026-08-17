@@ -1260,3 +1260,17 @@ tr[aria-selected="true"] {
   padding: 0;
   cursor: pointer;
 }
+
+/* --- Reference convergence plot -------------------------------------------------- */
+.reference-plot {
+  width: 100%;
+  height: auto;
+  margin: 4px 0;
+  background: var(--surface-1);
+  border-radius: 3px;
+}
+
+.reference-plot__label {
+  font-size: 7px;
+  fill: var(--text-muted, #888);
+}

@@ -146,6 +146,15 @@ class AdaptivePolicy:
     #: completed generation -- because the alternative is the orchestrator's
     #: hard timeout, which SIGKILLs the process and keeps nothing.
     max_seconds: float | None = None
+    #: Geometry-precision floor on refinement, metres. Imported arcs are
+    #: tessellated at a ~1 um sagitta and containment runs against a 2 um
+    #: dilation, so elements below this scale resolve the *tessellation*,
+    #: not the copper -- refinement past it manufactures detail the source
+    #: data never contained. Marked-element target sizes clamp here, and
+    #: each generation records how many seeds the floor bit
+    #: (`floor_clamped_seeds`), so a run limited by source fidelity says so
+    #: instead of burning DOFs on false precision (spec §15).
+    min_element_m: float = 2e-6
 
     def __post_init__(self) -> None:
         """Reject policies that could never terminate or never refine."""
@@ -171,6 +180,10 @@ class Generation:
     power_mismatch_fraction: float
     marked_elements: int
     quantities: dict[str, float] = field(default_factory=dict)
+    #: Seeds whose demanded size was raised to the geometry-precision
+    #: floor. Non-zero means further accuracy is limited by the imported
+    #: geometry's own fidelity, not by compute.
+    floor_clamped_seeds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,14 +311,19 @@ def refine_field(
     marked: npt.NDArray[np.int64],
     ratio: float,
     previous: RefinementField | None,
-) -> RefinementField:
+    floor_m: float = 0.0,
+) -> tuple[RefinementField, int]:
     """Turn marked elements into seed points demanding a smaller size.
 
-    A marked element asks for `h_K / ratio` at its centroid. Seeds from
+    A marked element asks for `h_K / ratio` at its centroid, no finer than
+    `floor_m` -- the geometry-precision floor, below which "refinement"
+    resolves the import tessellation rather than the copper. Seeds from
     earlier passes are carried forward, because the sizing field is rebuilt
     from scratch on every re-mesh -- dropping them would let a previously
     refined patch coarsen again the moment its error fell below the marking
     threshold, and the loop would oscillate instead of converging.
+
+    Returns the field and how many of the *new* seeds the floor clamped.
     """
     corners = problem.points[problem.triangles[marked]]
     centroids = corners.mean(axis=1)
@@ -318,11 +336,13 @@ def refine_field(
         axis=1,
     )
     sizes = edges.max(axis=1) / ratio
+    clamped = int((sizes < floor_m).sum())
+    sizes = np.maximum(sizes, floor_m)
 
     if previous is not None and len(previous):
         centroids = np.vstack([previous.points, centroids])
         sizes = np.concatenate([previous.sizes, sizes])
-    return RefinementField(centroids, sizes)
+    return RefinementField(centroids, sizes), clamped
 
 
 def solve_adaptive(
@@ -405,6 +425,9 @@ def solve_adaptive(
             if settled and conserved
             else dorfler_mark(marking_indicators, policy.theta)
         )
+        next_field, floor_clamped = refine_field(
+            problem, marked, policy.refinement_ratio, field, policy.min_element_m
+        )
         generations.append(
             Generation(
                 index=index,
@@ -419,6 +442,7 @@ def solve_adaptive(
                 quantities=_quantities_of(
                     result, qoi, problem, field_data.tri_j_vol_a_per_m2
                 ),
+                floor_clamped_seeds=floor_clamped,
             )
         )
         previous_qoi = qoi
@@ -426,7 +450,7 @@ def solve_adaptive(
         if settled and conserved:
             status = AdaptiveStatus.CONVERGED
             break
-        field = refine_field(problem, marked, policy.refinement_ratio, field)
+        field = next_field
         if on_generation is not None:
             on_generation(AdaptiveResume(tuple(generations), field, streak))
         if over_budget or last_pass:

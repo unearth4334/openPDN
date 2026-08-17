@@ -105,23 +105,26 @@ process memory, not factor storage, is what the OOM killer acts on.
 ## Linear solver
 
 Direct: SuperLU with iterative refinement, the default and the reference.
-Iterative: SciPy CG with **Jacobi** preconditioning — *not* the PETSc + hypre
-AMG that ADR-0014 chose, because petsc4py could not be built in this
-environment (no system PETSc, no network) and pyamg is absent. The
-abstraction, derived tolerance (≤ 0.05 × discretisation target), full
-diagnostics and refusal-on-max-iterations are all in place for AMG to slot
-into.
+Iterative: CG with **smoothed-aggregation AMG** (pyamg — MIT, wheel-only;
+petsc4py remains unbuildable here, and moving to PETSc + hypre later is a
+preconditioner swap behind the same report fields). Jacobi remains the
+dependency-free fallback, and without AMG `AUTO` refuses to route large
+jobs to it — Jacobi-CG was measured unable to converge at 2.24M DOFs
+(5,000 iterations exhausted at residual 4.2e-3).
 
+Measured, `plane_neck_plane_board`, matched answers to better than 1e-9:
+
+    DOFs        direct       AMG-CG      AMG iterations
+    35,976      0.10 s       0.91 s           13
+    143,237     1.53 s       2.10 s           29
+    571,557    19.02 s       3.02 s           39
+    2,279,489  256.5 s      12.9 s            42   (3.16 GiB vs 11.25 GiB)
+
+Iteration count is near mesh-independent — the property the backend was
+designed around — and the wall-time curves cross between 143k and 571k
+DOFs, so `AUTO` switches to iterative at 200k when AMG is available.
 Cross-validation (release gate): direct and iterative agree on terminal
-resistance to 1e-14 relative across 287–35,976 DOFs, and on the whole field,
-power and conservation likewise.
-
-Measured limits, recorded rather than smoothed: Jacobi-CG iterations grow as
-√DOFs (112 → 940 over 287 → 35,976); at 2,244,650 DOFs it exhausted 5,000
-iterations at residual 4.2e-3 and refused. An earlier `AUTO` threshold of
-500k therefore routed feasible jobs to a backend that predictably could not
-converge them; `AUTO` now means direct until an AMG preconditioner exists,
-and `iterative` is an explicit memory-bound opt-in.
+resistance, fields, power and conservation across every size checked.
 
 ## Current imbalance / energy imbalance
 
@@ -154,26 +157,30 @@ separately.
 
 ## Not done, and why
 
-* **PETSc + hypre AMG** — environment cannot build it. The measured √DOF
-  iteration growth of Jacobi-CG is the empirical case for it.
+* **PETSc + hypre specifically** — the environment cannot build petsc4py.
+  The AMG requirement itself is met through pyamg; a later swap to hypre is
+  contained behind the preconditioner report field.
 * **Cross-solver validation against ElmerFEM** (spec §56) — no external FEM
   package installable here. The independent checks that stand in its place:
   manufactured solutions with observed convergence order, analytical
   resistance/spreading formulas, and direct-vs-iterative backend agreement.
   A `reference-validation` workflow against Elmer remains future work and
   must not enter ordinary CI.
-* **Geometry-precision floor** (spec §15) — refinement is not yet clamped at
-  the imported data's own fidelity; the sizing-field floor (`min_size_m`)
-  exists but is not derived from source precision metadata.
-* **Mesh/error-indicator overlays and convergence plots in the viewer**
-  (spec §47–49) — the result panel shows the quality state, per-generation
-  table and per-quantity verdicts; field-level overlays of the adaptive mesh
-  are not rendered.
+* **Mesh and error-indicator field overlays in the viewer** (spec §48–49) —
+  the result panel shows the quality state, a convergence plot, the
+  per-generation table and per-quantity verdicts; rendering the adaptive
+  mesh itself (and per-element indicators) as viewport overlays needs
+  artifact-schema and scene-model additions and remains future work.
+
+The geometry-precision floor (spec §15) is implemented: refinement seeds
+clamp at 2 µm — the scale of the importer's arc tessellation — each
+generation records how many seeds the floor bit, and the CLI and result
+panel say when further accuracy is limited by source fidelity rather than
+compute.
 
 ## Recommended next numerical improvement
 
-An AMG preconditioner (hypre via PETSc, or pyamg as a pure-Python interim)
-— it converts the iterative backend from a validated fallback into the
-scalable path every measurement here says is needed above a few million
-DOFs, and it is the only item above that unblocks a target rather than
-polishing one.
+Adaptive-mesh and error-indicator viewport overlays, or the PETSc + hypre
+swap if multi-million-DOF Reference work becomes routine — with AMG landed,
+nothing else in this report is blocked on numerics; the remaining items are
+visualisation and an external cross-check.

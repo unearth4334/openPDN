@@ -385,6 +385,7 @@ def _save_checkpoint(
                 "power_mismatch_fraction": g.power_mismatch_fraction,
                 "marked_elements": g.marked_elements,
                 "quantities": g.quantities,
+                "floor_clamped_seeds": g.floor_clamped_seeds,
             }
             for g in state.generations
         ],
@@ -438,6 +439,7 @@ def _load_checkpoint(
             power_mismatch_fraction=item["power_mismatch_fraction"],
             marked_elements=item["marked_elements"],
             quantities=dict(item["quantities"]),
+            floor_clamped_seeds=int(item.get("floor_clamped_seeds", 0)),
         )
         for item in payload["generations"]
     )
@@ -468,6 +470,7 @@ def _reference_convergence(outcome: AdaptiveOutcome) -> dict[str, Any]:
                 "estimated_error": generation.estimated_error,
                 "marked_elements": generation.marked_elements,
                 "quantities": generation.quantities,
+                "floor_clamped_seeds": generation.floor_clamped_seeds,
             }
             for generation in outcome.generations
         ],
