@@ -80,7 +80,27 @@ _SHAPES: Final[dict[AccuracyProfile, _ProfileShape]] = {
         growth_rate=0.4,
         verify_convergence=True,
     ),
+    # Reference resolves only its *starting* mesh. Everything after the first
+    # pass is decided by the error estimator, so this is deliberately coarse
+    # -- spending DOFs uniformly up front is precisely what adaptivity exists
+    # to avoid, and a cheap first pass is what tells the estimator where the
+    # error actually is. `verify_convergence` is False because the adaptive
+    # loop runs its own, stronger convergence check; the fixed sqrt(2)
+    # comparison would double the cost to answer a question already asked.
+    AccuracyProfile.REFERENCE: _ProfileShape(
+        diagonal_divisions=180.0,
+        elements_across_feature=8,
+        growth_rate=0.5,
+        verify_convergence=False,
+    ),
 }
+
+# Every profile must resolve. A member added to the enum without a shape here
+# would raise only when someone first queued that profile -- checking at import
+# turns a latent production failure into an immediate one.
+_missing = set(AccuracyProfile) - set(_SHAPES)
+if _missing:  # pragma: no cover - a guard against future edits
+    raise RuntimeError(f"Accuracy profiles without a resolved shape: {sorted(_missing)}")
 
 #: Minimum element size as a fraction of the maximum: two decades of grading
 #: covers pad-scale refinement inside plane-scale copper.
@@ -98,6 +118,14 @@ def resolve_profile(
     """Resolve a named profile into concrete sizing for one board.
 
     Returns the mesh spec and whether a convergence-verification pass runs.
+    For `REFERENCE` the mesh returned is only the adaptive loop's *starting*
+    point -- the mesh it finishes on is an output of the run, not an input
+    to it (ADR-0015 §1).
+
+    Raises:
+        KeyError: An accuracy profile with no shape defined. Every member of
+            `AccuracyProfile` must appear in `_SHAPES`; the pairing is
+            checked at import.
     """
     shape = _SHAPES[profile]
     max_element_m = board_diagonal_m / shape.diagonal_divisions

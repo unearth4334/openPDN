@@ -220,6 +220,28 @@ extension of that pipeline, not a parallel one.
   lands on the initial mesh and ships fields that disagree with the result
   beside them.
 
+## Wiring, and how it fails silently
+
+The tier has three seams where a piece can exist, pass its own tests, and
+still never run. All three have already broken once:
+
+* **`AccuracyProfile` -> `_SHAPES` in `accuracy.py`.** Adding `REFERENCE`
+  without a shape made `SimulationService.plan` raise `KeyError` for every
+  Reference job -- the whole tier unreachable, while the adaptive loop,
+  worker branch and job semantics all passed their own tests. There is now
+  an import-time check that every profile resolves, and
+  `tests/integration/test_simulation_service.py` parameterises over the enum.
+* **`spec.reference_policy` -> the worker branch.** Before that branch
+  existed the worker ran Reference jobs as plain fixed-mesh solves, ignoring
+  the policy and publishing under a Reference label.
+* **The API `Literal`.** `reference` has to be in the accuracy union and the
+  policy has to be carried through `to_draft`, or the tier is invisible to
+  every client.
+
+The pattern: **test the path a real request takes**, not only the pieces.
+Parameterise over the enum wherever profiles are handled, so adding one
+without wiring it fails immediately instead of at the first user request.
+
 ## Validating this tier
 
 Measurement, not assertion. Specifically:

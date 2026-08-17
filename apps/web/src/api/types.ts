@@ -258,7 +258,34 @@ export interface DevFixtureResponse {
 // --- Simulation -----------------------------------------------------------------
 
 export type SimulationKind = "ir_drop" | "resistance";
-export type AccuracyProfile = "preview" | "standard" | "high" | "verification";
+export type AccuracyProfile = "preview" | "standard" | "high" | "verification" | "reference";
+
+/**
+ * Adaptive policy for a Reference run. Required by the `reference` profile
+ * and rejected by the others: a fixed-mesh profile has nothing to adapt.
+ * Server-side ceilings are stricter than these bounds and are not visible
+ * here, so a request within them can still be refused.
+ */
+export interface ReferencePolicyRequest {
+  target_qoi_rel_change?: number;
+  max_passes?: number;
+  max_dofs?: number;
+  theta?: number;
+  refinement_ratio?: number;
+  element_order?: "p1" | "p2";
+  goal_oriented?: boolean;
+  linear_backend?: "auto" | "direct" | "iterative";
+  linear_tolerance_fraction?: number;
+}
+
+/** What a finished Reference run is claiming. Anything but `converged`
+ * means the answer must not be presented as a clean result. */
+export type ReferenceQuality =
+  | "converged"
+  | "converged_with_model_limitations"
+  | "resource_limited"
+  | "not_converged"
+  | "numerical_failure";
 export type JobState =
   | "queued"
   | "claimed"
@@ -287,6 +314,7 @@ export interface SimulationDraftRequest {
   to_terminal_ids?: string[];
   to_via_ids?: string[];
   via_plating_um?: number | null;
+  reference?: ReferencePolicyRequest | null;
 }
 
 export interface EstimateResponse {

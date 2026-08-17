@@ -19,10 +19,30 @@ if TYPE_CHECKING:
     from openpdn.domain.board import Board
     from openpdn.geometry.api import NormalizedGeometry
 
-#: Bytes of working memory per degree of freedom for the SuperLU direct path,
-#: calibrated on the validation problems (matrix + factors + mesh arrays) and
-#: deliberately generous: over-estimating protects the worker budget.
-BYTES_PER_DOF: Final = 1500
+#: Bytes of working memory per degree of freedom for the SuperLU direct path.
+#:
+#: Not a constant in reality: a 2-D factorisation fills in superlinearly, so
+#: the true figure *rises* with problem size. Measured on
+#: `plane_neck_plane_board` (L+U non-zeros against DOF count, 12 bytes per
+#: stored entry):
+#:
+#:     DOFs        fill ratio     bytes/DOF
+#:     287             2.6x            189
+#:     2,465           7.1x            578
+#:     35,976         16.1x          1,342
+#:     143,213        22.5x          1,880
+#:
+#: A single number therefore over-estimates small problems and *under*-
+#: estimates large ones, which is the dangerous direction: a budget refusal
+#: exists to stop a job that will not fit. This value is raised to cover the
+#: top of the measured range with headroom rather than sitting mid-curve, so
+#: the estimate errs towards refusing a job that would have fit rather than
+#: admitting one that will not.
+#:
+#: The iterative backend (ADR-0014) has no factorisation and its memory is
+#: roughly flat in DOFs, so this over-states it considerably -- which is
+#: safe, and is why `AUTO` switching to iterative buys headroom.
+BYTES_PER_DOF: Final = 2400
 
 #: A planar Delaunay triangulation of n points has about 2n triangles.
 TRIANGLES_PER_POINT: Final = 2.0

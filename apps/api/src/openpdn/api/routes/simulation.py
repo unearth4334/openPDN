@@ -38,6 +38,7 @@ from openpdn.application.simulation_models import (
     AccuracyProfile,
     JobRecord,
     LoadSpec,
+    ReferencePolicy,
     SimulationDraft,
     SimulationKind,
     SimulationRequestError,
@@ -60,6 +61,40 @@ class LoadRequest(BaseModel):
     current_a: float = Field(gt=0.0, allow_inf_nan=False)
 
 
+class ReferencePolicyRequest(BaseModel):
+    """Adaptive policy for a Reference run.
+
+    Required by the `reference` profile and rejected by the others, since a
+    fixed-mesh profile has nothing to adapt. Bounds here are shape checks;
+    the administrative ceilings are enforced server-side, where a client
+    cannot see or move them.
+    """
+
+    target_qoi_rel_change: float = Field(default=1e-3, gt=0.0, lt=1.0)
+    max_passes: int = Field(default=5, ge=1, le=32)
+    max_dofs: int = Field(default=2_000_000, gt=0)
+    theta: float = Field(default=0.5, gt=0.0, le=1.0)
+    refinement_ratio: float = Field(default=2.0, gt=1.0, le=8.0)
+    element_order: Literal["p1", "p2"] = "p2"
+    goal_oriented: bool = False
+    linear_backend: Literal["auto", "direct", "iterative"] = "auto"
+    linear_tolerance_fraction: float = Field(default=0.05, gt=0.0, le=1.0)
+
+    def to_policy(self) -> ReferencePolicy:
+        """Map to the application-layer policy."""
+        return ReferencePolicy(
+            target_qoi_rel_change=self.target_qoi_rel_change,
+            max_passes=self.max_passes,
+            max_dofs=self.max_dofs,
+            theta=self.theta,
+            refinement_ratio=self.refinement_ratio,
+            element_order=self.element_order,
+            goal_oriented=self.goal_oriented,
+            linear_backend=self.linear_backend,
+            linear_tolerance_fraction=self.linear_tolerance_fraction,
+        )
+
+
 class SimulationDraftRequest(BaseModel):
     """A simulation request as posted by the UI. Untrusted input."""
 
@@ -67,13 +102,14 @@ class SimulationDraftRequest(BaseModel):
     net_id: str = Field(min_length=1, max_length=256)
     source_terminal_ids: list[str] = Field(default_factory=list, max_length=256)
     source_via_ids: list[str] = Field(default_factory=list, max_length=256)
-    accuracy: Literal["preview", "standard", "high", "verification"]
+    accuracy: Literal["preview", "standard", "high", "verification", "reference"]
     name: str = Field(default="", max_length=200)
     source_voltage_v: float = Field(default=0.0, allow_inf_nan=False)
     loads: list[LoadRequest] = Field(default_factory=list, max_length=64)
     to_terminal_ids: list[str] = Field(default_factory=list, max_length=256)
     to_via_ids: list[str] = Field(default_factory=list, max_length=256)
     via_plating_um: float | None = Field(default=None, gt=0.0, lt=1000.0)
+    reference: ReferencePolicyRequest | None = None
 
     def to_draft(self, board_id: str) -> SimulationDraft:
         """Convert to the application draft (validating shape invariants)."""
@@ -97,6 +133,7 @@ class SimulationDraftRequest(BaseModel):
             to_terminal_ids=tuple(self.to_terminal_ids),
             to_via_ids=tuple(self.to_via_ids),
             via_plating_m=None if self.via_plating_um is None else self.via_plating_um * 1e-6,
+            reference_policy=None if self.reference is None else self.reference.to_policy(),
         )
 
 
