@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from openpdn.application.simulation_models import JobState
+from openpdn.infrastructure.fem_planner import BYTES_PER_DOF
 from openpdn.infrastructure.process import worker_environment
 
 if TYPE_CHECKING:
@@ -55,6 +56,9 @@ class _RunningWorker:
     worker_id: str
     process: subprocess.Popen[bytes]
     started_at: float
+    #: What admission control reserved for this job, so concurrent starts
+    #: can be judged against the worker's memory budget.
+    estimated_bytes: int = 0
     terminating_since: float | None = None
 
 
@@ -115,18 +119,59 @@ class Orchestrator:
         del signum, frame
         self._stop_requested = True
 
+    def _committed_memory_bytes(self) -> int:
+        """Memory the jobs already running were admitted against."""
+        return sum(worker.estimated_bytes for worker in self._running.values())
+
     def _claim_and_spawn(self) -> None:
         while len(self._running) < self.limits.max_concurrent_jobs:
             worker_id = f"worker-{uuid.uuid4().hex[:12]}"
             record = self.jobs.claim_next(worker_id, self.limits.lease_seconds)
             if record is None:
                 return
+
+            estimated_bytes = record.spec.estimated_dofs * BYTES_PER_DOF
+            committed = self._committed_memory_bytes()
+            budget = self.limits.memory_budget_bytes
+            if self._running and committed + estimated_bytes > budget:
+                # Not enough headroom beside what is already running. Hand it
+                # back rather than starting it: a Reference solve can hold a
+                # worker's entire memory, and oversubscribing trades a slow
+                # queue for an OOM kill, which costs the whole job.
+                self.jobs.release_claim(record.spec.job_id, worker_id)
+                _logger.info(
+                    "orchestrator.deferred_for_memory",
+                    extra={
+                        "event": "orchestrator.deferred_for_memory",
+                        "job_id": record.spec.job_id,
+                        "estimated_bytes": estimated_bytes,
+                        "committed_bytes": committed,
+                        "budget_bytes": budget,
+                    },
+                )
+                return
+            if not self._running and estimated_bytes > budget:
+                # Nothing else is running and it still does not fit. Deferring
+                # would park it forever, so start it alone and say so -- the
+                # worker's own budget check already refused anything truly
+                # over the line, and an honest warning beats a silent stall.
+                _logger.warning(
+                    "orchestrator.over_budget_alone",
+                    extra={
+                        "event": "orchestrator.over_budget_alone",
+                        "job_id": record.spec.job_id,
+                        "estimated_bytes": estimated_bytes,
+                        "budget_bytes": budget,
+                    },
+                )
+
             process = self._spawn(record.spec.job_id, worker_id)
             self._running[record.spec.job_id] = _RunningWorker(
                 job_id=record.spec.job_id,
                 worker_id=worker_id,
                 process=process,
                 started_at=time.time(),
+                estimated_bytes=estimated_bytes,
             )
             _logger.info(
                 "orchestrator.spawned",

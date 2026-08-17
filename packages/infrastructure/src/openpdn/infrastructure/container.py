@@ -89,6 +89,9 @@ def build_container(settings: Settings | None = None) -> Container:
         max_job_seconds=resolved.worker_max_job_seconds,
         lease_seconds=resolved.worker_lease_seconds,
         max_attempts=resolved.worker_max_attempts,
+        max_reference_passes=resolved.worker_max_reference_passes,
+        max_reference_dofs=resolved.worker_max_reference_dofs,
+        memory_budget_bytes=resolved.worker_memory_budget_bytes,
     )
 
     return Container(

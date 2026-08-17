@@ -106,6 +106,7 @@ class SimulationService:
         record = self._stored_board(draft.board_id)
         board = record.import_result.board
         self._validate_references(draft, board)
+        self._enforce_reference_ceilings(draft)
 
         diagonal_m = _diagonal_m(board)
         mesh, verify = resolve_profile(draft.accuracy, diagonal_m)
@@ -189,6 +190,11 @@ class SimulationService:
             created_at_epoch_s=now,
             signature=signature,
             reference_policy=draft.reference_policy,
+            estimated_dofs=(
+                draft.reference_policy.max_dofs
+                if draft.reference_policy is not None
+                else estimate.dofs
+            ),
         )
         return SimulationPlan(
             estimate=estimate,
@@ -292,6 +298,28 @@ class SimulationService:
             vias.extend(load.via_ids)
         vias.extend(draft.to_via_ids)
         return vias
+
+    def _enforce_reference_ceilings(self, draft: SimulationDraft) -> None:
+        """Refuse an adaptive policy that exceeds the administrative maxima.
+
+        Server-side, whatever the client sent (ADR-0015 §7). Refused rather
+        than clamped: a run silently held to a lower ceiling would report
+        RESOURCE_LIMITED for a limit the user never chose, which is exactly
+        the kind of quiet degradation this tier is built to avoid.
+        """
+        policy = draft.reference_policy
+        if policy is None:
+            return
+        if policy.max_passes > self._limits.max_reference_passes:
+            raise SimulationRequestError(
+                f"Requested {policy.max_passes} adaptive passes, above the configured "
+                f"maximum of {self._limits.max_reference_passes}"
+            )
+        if policy.max_dofs > self._limits.max_reference_dofs:
+            raise SimulationRequestError(
+                f"Requested a {policy.max_dofs:,}-DOF ceiling, above the configured "
+                f"maximum of {self._limits.max_reference_dofs:,}"
+            )
 
     def _validate_references(self, draft: SimulationDraft, board: Board) -> None:
         nets_by_id = {str(net.id): net for net in board.nets}

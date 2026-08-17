@@ -27,6 +27,7 @@ from openpdn.application.accuracy import VERIFICATION_REFINEMENT_FACTOR, refine_
 from openpdn.application.simulation_models import (
     JobRecord,
     JobState,
+    ResultQuality,
     SimulationJobSpec,
     SimulationKind,
 )
@@ -48,6 +49,12 @@ from openpdn.domain.study import (
 from openpdn.domain.units import AMPERE, METRE, VOLT
 from openpdn.solver.api import SolverError
 from openpdn.solver.fem import SOLVER_VERSION, FemFieldData, FemSheetSolver
+from openpdn.solver.fem.adaptive import (
+    AdaptiveOutcome,
+    AdaptivePolicy,
+    AdaptiveStatus,
+    solve_adaptive,
+)
 from openpdn.solver.fem.solver import PROBE_TEST_CURRENT_A
 
 if TYPE_CHECKING:
@@ -172,6 +179,11 @@ def _execute(
     study = _study_from_spec(spec, board, refine_factor=1.0)
     solver = FemSheetSolver(normalizer=normalizer)
 
+    if spec.reference_policy is not None:
+        return _execute_reference(
+            record, jobs, artifacts, normalizer, board, study, timings
+        )
+
     jobs.update_stage(job_id, "meshing")
     started = time.perf_counter()
     prepared = solver.prepare(board, study)
@@ -202,6 +214,106 @@ def _execute(
 
     artifacts.publish(job_id)
     return summary
+
+
+def _execute_reference(
+    record: JobRecord,
+    jobs: JobStore,
+    artifacts: SimulationArtifactStore,
+    normalizer: GeometryNormalizer,
+    board: Board,
+    study: AnalysisStudy,
+    timings: dict[str, Any],
+) -> dict[str, Any]:
+    """Run an adaptive Reference job and publish its convergence evidence.
+
+    A Reference spec froze a policy rather than a mesh, so the fixed-mesh
+    path above would silently ignore everything the user asked for and hand
+    back a single coarse solve wearing a Reference label. That is precisely
+    the quiet degradation this tier exists to prevent, so adaptive specs
+    branch here instead.
+    """
+    spec = record.spec
+    job_id = spec.job_id
+    policy = spec.reference_policy
+    assert policy is not None  # noqa: S101 - guarded by the caller
+
+    jobs.update_stage(job_id, "solving")
+    started = time.perf_counter()
+    outcome = solve_adaptive(
+        board,
+        study,
+        normalizer,
+        AdaptivePolicy(
+            target_qoi_rel_change=policy.target_qoi_rel_change,
+            max_passes=policy.max_passes,
+            max_dofs=policy.max_dofs,
+            theta=policy.theta,
+            refinement_ratio=policy.refinement_ratio,
+            goal_oriented=policy.goal_oriented,
+        ),
+    )
+    timings["adaptive_s"] = time.perf_counter() - started
+
+    jobs.update_stage(job_id, "serializing")
+    started = time.perf_counter()
+    working = artifacts.working_dir(job_id)
+    if outcome.field_data is None:  # pragma: no cover - the loop always solves
+        raise RuntimeError("Adaptive run produced no field data to publish")
+    convergence = _reference_convergence(outcome)
+    summary = _write_artifacts(
+        working, spec, board, outcome.result, outcome.field_data, convergence, timings
+    )
+    summary["reference_quality"] = _quality_of(outcome).value
+    timings["serialize_s"] = time.perf_counter() - started
+    _write_manifest(working, spec, outcome.result, timings, normalizer.version)
+
+    artifacts.publish(job_id)
+    return summary
+
+
+def _quality_of(outcome: AdaptiveOutcome) -> ResultQuality:
+    """Map an adaptive outcome onto the reportable result quality."""
+    return {
+        AdaptiveStatus.CONVERGED: ResultQuality.CONVERGED,
+        AdaptiveStatus.CONVERGED_WITH_MODEL_LIMITATIONS: (
+            ResultQuality.CONVERGED_WITH_MODEL_LIMITATIONS
+        ),
+        AdaptiveStatus.RESOURCE_LIMITED: ResultQuality.RESOURCE_LIMITED,
+        AdaptiveStatus.NOT_CONVERGED: ResultQuality.NOT_CONVERGED,
+    }[outcome.status]
+
+
+def _reference_convergence(outcome: AdaptiveOutcome) -> dict[str, Any]:
+    """The per-generation history, as published evidence rather than a log."""
+    return {
+        "status": outcome.status,
+        "converged": outcome.converged,
+        "generations": [
+            {
+                "index": generation.index,
+                "dofs": generation.dof_count,
+                "elements": generation.element_count,
+                "quantity_of_interest": generation.quantity_of_interest,
+                "qoi_rel_change": generation.qoi_rel_change,
+                "estimated_error": generation.estimated_error,
+                "marked_elements": generation.marked_elements,
+                "quantities": generation.quantities,
+            }
+            for generation in outcome.generations
+        ],
+        "quantities": [
+            {
+                "name": quantity.name,
+                "converged": quantity.converged,
+                "singular": quantity.singular,
+                "rel_change": quantity.rel_change,
+                "extrapolated": quantity.extrapolated,
+                "observed_order": quantity.observed_order,
+            }
+            for quantity in outcome.quantities
+        ],
+    }
 
 
 def _load_board(

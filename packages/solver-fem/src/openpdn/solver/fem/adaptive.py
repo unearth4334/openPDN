@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from openpdn.domain.study import AnalysisStudy
     from openpdn.geometry.api import GeometryNormalizer
     from openpdn.solver.fem.problem import SheetProblem
+    from openpdn.solver.fem.solver import FemFieldData
 
 
 class AdaptiveStatus:
@@ -191,6 +192,10 @@ class AdaptiveOutcome:
     generations: tuple[Generation, ...]
     status: str
     quantities: tuple[QuantityConvergence, ...] = ()
+    #: Field data of the *final* generation. Carried on the outcome because
+    #: re-solving to recover it would land on the initial mesh, publishing
+    #: fields that disagree with the result beside them.
+    field_data: FemFieldData | None = None
 
     @property
     def converged(self) -> bool:
@@ -325,6 +330,7 @@ def solve_adaptive(
         result, field_data, problem, node_values = solve_with_controls(
             board, study, normalized, refinement=field
         )
+        final_field_data = field_data
         indicators = flux_jump_indicators(problem, node_values)
         marking_indicators = (
             dual_weighted_indicators(problem, indicators)
@@ -404,6 +410,7 @@ def solve_adaptive(
         generations=tuple(generations),
         status=status,
         quantities=quantities,
+        field_data=final_field_data,
     )
 
 

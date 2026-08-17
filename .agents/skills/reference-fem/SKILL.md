@@ -206,9 +206,19 @@ extension of that pipeline, not a parallel one.
   whatever the client asked for. Over-budget work is refused, never degraded.
 * Reference jobs are a separate priority class and admission accounts for
   estimated *memory* — one Reference job can take a whole worker.
-* Completed generations are checkpointed; a cancelled run may keep its latest
-  valid generation, labelled partial and `NOT_CONVERGED`. Never present an
-  intermediate generation as Reference quality.
+* Completed generations are *intended* to be checkpointed so a cancelled run
+  can keep its latest valid generation, labelled partial and
+  `NOT_CONVERGED`. **This is not implemented yet** -- a requeued Reference
+  run restarts from generation zero. Never present an intermediate
+  generation as Reference quality.
+* **An adaptive spec must reach the adaptive path.** The worker branches on
+  `spec.reference_policy`; a Reference job that fell through to the
+  fixed-mesh branch would silently ignore its whole policy and still publish
+  under a Reference label. That defect existed and was invisible because
+  nothing downstream checked -- if you add a code path here, check it.
+* Publish the **final generation's** field data. Re-solving to recover it
+  lands on the initial mesh and ships fields that disagree with the result
+  beside them.
 
 ## Validating this tier
 

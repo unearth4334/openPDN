@@ -131,6 +131,28 @@ class Settings(BaseSettings):
         gt=0,
         description="Worker lease duration; expired leases trigger recovery.",
     )
+    worker_max_reference_passes: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description=(
+            "Hardest adaptive-pass ceiling a Reference job may request. "
+            "Server-side; an over-budget request is refused, never clamped."
+        ),
+    )
+    worker_max_reference_dofs: int = Field(
+        default=8_000_000,
+        gt=0,
+        description="Hardest DOF ceiling a Reference job may request.",
+    )
+    worker_memory_budget_bytes: int = Field(
+        default=8 * 1024**3,
+        gt=0,
+        description=(
+            "Worker memory available to concurrent jobs. Admission control "
+            "refuses to start a job whose estimate would oversubscribe it."
+        ),
+    )
     worker_max_attempts: int = Field(
         default=3,
         ge=1,

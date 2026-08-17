@@ -122,3 +122,42 @@ without converging, and must not present as a clean result.
 * The retry rule is unchanged and matters more here: a worker-*reported*
   numerical failure is terminal and never auto-retried. Only silent worker
   death requeues — and with checkpoints, requeue can resume rather than restart.
+
+## Measured (orchestration, 2026-08-16)
+
+§7 (server-side ceilings) and §8 (priority classes, memory-aware admission)
+are implemented. Three things are worth recording, one of them a defect this
+work uncovered.
+
+* **The worker had no Reference branch at all.** A Reference job could be
+  drafted, validated, queued, claimed and executed -- and the worker would
+  run it as a plain fixed-mesh solve, silently ignoring every knob in its
+  policy and publishing the result under a Reference label. That is exactly
+  the quiet degradation this tier exists to prevent, and it was invisible
+  because nothing downstream checked. Adaptive specs now branch into the
+  adaptive loop, and the outcome's quality state is published with the
+  result.
+* **Published fields must come from the final generation.** A first cut
+  recovered them by re-solving, which lands on the *initial* mesh -- the
+  result and the field data beside it would have described different meshes.
+  `AdaptiveOutcome` now carries the final field data (verified: 589 triangles
+  in both).
+* **Ceilings are refused, not clamped.** Silently holding a run to a lower
+  ceiling would make it report `RESOURCE_LIMITED` for a limit the user never
+  chose, which is indistinguishable from the run genuinely needing more.
+* **Admission control needs a claim it can hand back.** The orchestrator must
+  claim a job to learn its size, so `release_claim` returns it to the queue
+  and *decrements* the attempt counter -- that counter bounds execution
+  retries, and a job deferred for memory never executed. Without the
+  decrement, a repeatedly deferred job would exhaust its retry budget having
+  never been tried once.
+* The job table gained a `priority` column, which needed a real migration:
+  `CREATE TABLE IF NOT EXISTS` does not backfill columns, and deployed stores
+  hold live rows. Indexes over migrated columns are created after the
+  migration runs, not in the same script.
+
+**Not done: checkpointing (§9).** Completed adaptive generations are not yet
+persisted, so a cancelled or requeued Reference run still restarts from
+generation zero and `discard_working` still deletes partial state. The
+generation history is published with a finished result, but resuming an
+unfinished one is outstanding.

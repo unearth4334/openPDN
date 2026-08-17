@@ -25,8 +25,10 @@ from openpdn.application.simulation_models import (
     SimulationJobSpec,
     SimulationKind,
     SimulationRequestError,
+    WorkerLimits,
     analysis_signature,
 )
+from openpdn.application.simulation_service import SimulationService
 
 
 def _mesh() -> ResolvedMeshSpec:
@@ -208,3 +210,87 @@ class TestSignature:
 
     def test_an_adaptive_run_differs_from_a_fixed_mesh_one(self):
         assert self._signature(None) != self._signature(ReferencePolicy())
+
+
+class TestServerSideCeilings:
+    """ADR-0015 §7: administrative maxima, enforced whatever the client sent."""
+
+    def _limits(self) -> WorkerLimits:
+        return WorkerLimits(
+            max_dofs=1_500_000,
+            max_concurrent_jobs=1,
+            max_job_seconds=1800.0,
+            lease_seconds=60.0,
+            max_attempts=3,
+            max_reference_passes=4,
+            max_reference_dofs=100_000,
+        )
+
+    def _service(self):
+        service = SimulationService.__new__(SimulationService)
+        service._limits = self._limits()
+        return service
+
+    def _draft(self, **policy_overrides) -> SimulationDraft:
+        return SimulationDraft(
+            kind=SimulationKind.IR_DROP,
+            board_id="board-1",
+            net_id="net-1",
+            accuracy=AccuracyProfile.REFERENCE,
+            source_terminal_ids=("t-a",),
+            source_voltage_v=1.0,
+            loads=(LoadSpec(current_a=1.0, terminal_ids=("t-b",)),),
+            reference_policy=ReferencePolicy(**policy_overrides),
+        )
+
+    def test_a_policy_within_the_ceilings_is_accepted(self):
+        self._service()._enforce_reference_ceilings(
+            self._draft(max_passes=4, max_dofs=100_000)
+        )
+
+    def test_too_many_passes_is_refused(self):
+        with pytest.raises(SimulationRequestError, match="above the configured maximum"):
+            self._service()._enforce_reference_ceilings(self._draft(max_passes=5))
+
+    def test_too_large_a_dof_ceiling_is_refused(self):
+        with pytest.raises(SimulationRequestError, match="above the configured maximum"):
+            self._service()._enforce_reference_ceilings(
+                self._draft(max_dofs=200_000)
+            )
+
+    def test_refused_rather_than_clamped(self):
+        # Silently holding a run to a lower ceiling would make it report
+        # RESOURCE_LIMITED for a limit the user never chose.
+        draft = self._draft(max_passes=99)
+        with pytest.raises(SimulationRequestError):
+            self._service()._enforce_reference_ceilings(draft)
+        assert draft.reference_policy.max_passes == 99  # untouched
+
+    def test_a_non_adaptive_draft_is_unaffected(self):
+        draft = SimulationDraft(
+            kind=SimulationKind.IR_DROP,
+            board_id="board-1",
+            net_id="net-1",
+            accuracy=AccuracyProfile.STANDARD,
+            source_terminal_ids=("t-a",),
+            source_voltage_v=1.0,
+            loads=(LoadSpec(current_a=1.0, terminal_ids=("t-b",)),),
+        )
+        self._service()._enforce_reference_ceilings(draft)
+
+
+class TestAdmissionSizing:
+    def test_an_adaptive_spec_is_admitted_against_its_ceiling(self):
+        # The achieved size is unknowable in advance, so admission reasons
+        # about the worst case the policy allows.
+        spec = _spec(reference_policy=ReferencePolicy(max_dofs=750_000), estimated_dofs=750_000)
+        assert spec.estimated_dofs == 750_000
+
+    def test_estimated_dofs_survive_a_round_trip(self):
+        spec = _spec(estimated_dofs=12_345)
+        assert SimulationJobSpec.from_json(spec.to_json()).estimated_dofs == 12_345
+
+    def test_a_spec_without_an_estimate_loads_as_zero(self):
+        payload = json.loads(_spec().to_json())
+        del payload["estimated_dofs"]
+        assert SimulationJobSpec.from_json(json.dumps(payload)).estimated_dofs == 0

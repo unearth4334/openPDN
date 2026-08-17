@@ -63,6 +63,18 @@ class JobStore(Protocol):
         """
         ...
 
+    def release_claim(self, job_id: str, worker_id: str) -> bool:
+        """Hand a claimed job back to the queue without having run it.
+
+        Used by admission control: the orchestrator must claim a job to learn
+        its size, and may then find there is not enough memory to start it
+        yet. The attempt counter is *decremented*, because it bounds
+        execution retries and this job never executed -- otherwise a job
+        repeatedly deferred for memory would exhaust its retry budget without
+        ever having been tried.
+        """
+        ...
+
     def renew_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> bool:
         """Extend the lease; False when the job is no longer this worker's."""
         ...

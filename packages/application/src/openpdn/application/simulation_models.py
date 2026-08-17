@@ -20,7 +20,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Any
 
 from openpdn.application.errors import ApplicationError
@@ -367,6 +367,11 @@ class SimulationJobSpec:
     #: mesh. `None` for every non-adaptive profile, including schema-2 rows
     #: that predate the tier.
     reference_policy: ReferencePolicy | None = None
+    #: Problem size this job was admitted against, for memory-aware
+    #: scheduling. For an adaptive run this is the policy's DOF *ceiling*,
+    #: since the achieved size is not knowable in advance and admission must
+    #: reason about the worst case it agreed to allow.
+    estimated_dofs: int = 0
 
     def to_json(self) -> str:
         """Serialise for durable storage."""
@@ -394,6 +399,7 @@ class SimulationJobSpec:
             "to_terminal_ids": list(self.to_terminal_ids),
             "to_via_ids": list(self.to_via_ids),
             "accuracy": self.accuracy.value,
+            "estimated_dofs": self.estimated_dofs,
             "reference_policy": (
                 None if self.reference_policy is None else self.reference_policy.to_payload()
             ),
@@ -451,6 +457,7 @@ class SimulationJobSpec:
             to_terminal_ids=to_terminal_ids,
             to_via_ids=tuple(data.get("to_via_ids") or ()),
             accuracy=AccuracyProfile(data["accuracy"]),
+            estimated_dofs=int(data.get("estimated_dofs", 0)),
             reference_policy=(
                 ReferencePolicy.from_payload(data["reference_policy"])
                 if data.get("reference_policy")
@@ -616,13 +623,45 @@ JOB_STAGES: tuple[str, ...] = (
 
 @dataclass(frozen=True, slots=True)
 class WorkerLimits:
-    """Server-side resource limits enforced on every queue request."""
+    """Server-side resource limits enforced on every queue request.
+
+    The Reference ceilings are separate from `max_dofs` because an adaptive
+    run's DOF count is not known at queue time: what can be checked in advance
+    is the *policy* it will refine under. They are administrative maxima --
+    a client asking for more is refused, never quietly clamped, since a
+    silently reduced ceiling would make a run report RESOURCE_LIMITED for a
+    reason the user never chose (ADR-0015 §7).
+    """
 
     max_dofs: int
     max_concurrent_jobs: int
     max_job_seconds: float
     lease_seconds: float
     max_attempts: int
+    #: Hardest ceiling an adaptive run may request, whatever the client asks.
+    max_reference_passes: int = 8
+    max_reference_dofs: int = 8_000_000
+    #: Worker memory available to concurrent jobs, for admission control.
+    memory_budget_bytes: int = 8 * 1024**3
+
+
+class JobPriority(IntEnum):
+    """Scheduling class. Lower runs first.
+
+    A Reference solve can occupy a worker for a long time. Left in one FIFO
+    queue it would block every short interactive analysis behind it, so the
+    two are scheduled as separate classes rather than by arrival order alone
+    (ADR-0015 §8). Within a class, order is still arrival order -- this is a
+    priority, not a preemption: a running job is never interrupted.
+    """
+
+    INTERACTIVE = 0
+    REFERENCE = 10
+
+    @classmethod
+    def for_accuracy(cls, accuracy: AccuracyProfile) -> JobPriority:
+        """The class a job of this profile is scheduled in."""
+        return cls.REFERENCE if accuracy.is_adaptive else cls.INTERACTIVE
 
 
 def new_job_id(signature: str, created_at_epoch_s: float) -> str:

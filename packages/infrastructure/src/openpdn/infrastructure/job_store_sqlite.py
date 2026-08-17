@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 from openpdn.application.simulation_models import (
     ALLOWED_TRANSITIONS,
+    JobPriority,
     JobRecord,
     JobState,
     SimulationJobSpec,
@@ -47,11 +48,36 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at REAL,
     finished_at REAL,
     spec_json TEXT NOT NULL,
-    result_summary_json TEXT
+    result_summary_json TEXT,
+    priority INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE INDEX IF NOT EXISTS jobs_signature ON jobs(signature);
 """
+
+#: Indexes over columns that migrations may have just added. Kept apart from
+#: `_SCHEMA` because `CREATE TABLE IF NOT EXISTS` leaves an existing table
+#: alone -- indexing a column before its migration runs fails on exactly the
+#: deployed databases this ordering exists to protect.
+_INDEXES: Final = """
+CREATE INDEX IF NOT EXISTS jobs_claim ON jobs(state, priority, queued_at);
+"""
+
+#: Columns added after the first release, applied to databases that already
+#: exist. `CREATE TABLE IF NOT EXISTS` does not backfill a new column, and
+#: there are live job rows in deployed stores, so every addition needs an
+#: entry here rather than only a change to the schema above.
+_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("priority", "ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _apply_migrations(connection: sqlite3.Connection) -> None:
+    """Add columns missing from a database created by an earlier release."""
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+    for column, statement in _MIGRATIONS:
+        if column not in existing:
+            connection.execute(statement)
 
 
 class SqliteJobStore:
@@ -64,6 +90,8 @@ class SqliteJobStore:
         self._local = threading.local()
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            _apply_migrations(connection)
+            connection.executescript(_INDEXES)
 
     def _connect(self) -> sqlite3.Connection:
         connection: sqlite3.Connection | None = getattr(self._local, "connection", None)
@@ -84,8 +112,9 @@ class SqliteJobStore:
         """Persist a new job in `QUEUED` state."""
         self._connect().execute(
             """
-            INSERT INTO jobs (id, signature, state, created_at, queued_at, spec_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs
+                (id, signature, state, created_at, queued_at, spec_json, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.spec.job_id,
@@ -94,6 +123,7 @@ class SqliteJobStore:
                 record.spec.created_at_epoch_s,
                 record.queued_at_epoch_s,
                 record.spec.to_json(),
+                int(JobPriority.for_accuracy(record.spec.accuracy)),
             ),
         )
 
@@ -110,7 +140,8 @@ class SqliteJobStore:
                 lease_expires_at = ?,
                 attempt = attempt + 1
             WHERE id = (
-                SELECT id FROM jobs WHERE state = ? ORDER BY queued_at LIMIT 1
+                SELECT id FROM jobs WHERE state = ?
+                ORDER BY priority ASC, queued_at ASC LIMIT 1
             ) AND state = ?
             RETURNING *
             """,
@@ -125,6 +156,21 @@ class SqliteJobStore:
             .fetchone()
         )
         return _record_from(row) if row is not None else None
+
+    def release_claim(self, job_id: str, worker_id: str) -> bool:
+        """Return a claimed job to the queue, undoing its attempt increment."""
+        cursor = self._connect().execute(
+            """
+            UPDATE jobs SET
+                state = ?,
+                claimed_by = NULL,
+                lease_expires_at = NULL,
+                attempt = CASE WHEN attempt > 0 THEN attempt - 1 ELSE 0 END
+            WHERE id = ? AND claimed_by = ? AND state = ?
+            """,
+            (JobState.QUEUED.value, job_id, worker_id, JobState.CLAIMED.value),
+        )
+        return cursor.rowcount > 0
 
     def renew_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> bool:
         """Extend the lease while the job still belongs to this worker."""
