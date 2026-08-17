@@ -277,6 +277,31 @@ class SimulationDraft:
             raise SimulationRequestError(f"A source and a load both attach to {sorted(overlap)!r}")
 
 
+class ReferenceTier(StrEnum):
+    """Named presets over `ReferencePolicy`; a convenience, never a stored identity.
+
+    A tier resolves to concrete policy numbers at draft-build time and is
+    then forgotten, exactly as accuracy profiles resolve to mesh numbers
+    (ADR-0011): the spec and its signature carry only the resolved values,
+    so a job re-run years later cannot depend on what "medium" meant the day
+    it was queued.
+
+    The ladder trades wall-clock for evidence:
+
+    * `LOW` -- a quick adaptive look. Loose target, one confirmation pass,
+      small ceilings.
+    * `MEDIUM` -- the defaults; engineering answer with two confirmations.
+    * `HIGH` -- pushes toward the re-meshing noise floor with three
+      confirmation passes and the full administrative ceilings. On small
+      boards this may honestly report RESOURCE_LIMITED rather than claim a
+      convergence the mesh noise cannot support.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 @dataclass(frozen=True, slots=True)
 class ReferencePolicy:
     """What a Reference run is aiming at, frozen at queue time.
@@ -289,14 +314,49 @@ class ReferencePolicy:
     """
 
     target_qoi_rel_change: float = 1e-3
-    max_passes: int = 5
+    max_passes: int = 12
     max_dofs: int = 2_000_000
-    theta: float = 0.5
+    theta: float = 0.7
     refinement_ratio: float = 2.0
     element_order: str = "p2"
     goal_oriented: bool = False
     linear_backend: str = "auto"
     linear_tolerance_fraction: float = 0.05
+    #: Consecutive passes that must meet the target before the run may claim
+    #: convergence. More than one because successive meshes are non-nested:
+    #: two meshes can agree by re-meshing accident (ADR-0013).
+    confirmations: int = 2
+
+    @classmethod
+    def for_tier(cls, tier: ReferenceTier) -> ReferencePolicy:
+        """Resolve a named tier into concrete policy numbers.
+
+        Measured on `plane_neck_plane_board` from a coarse start (values in
+        `tests/validation/test_reference_tier.py::TestTiers`); the shape of
+        the ladder -- looser targets converge sooner, tighter ones demand
+        more evidence and more ceiling -- is the point, the exact numbers
+        are the calibration.
+        """
+        if tier is ReferenceTier.LOW:
+            return cls(
+                target_qoi_rel_change=1e-2,
+                max_passes=6,
+                max_dofs=500_000,
+                confirmations=1,
+            )
+        if tier is ReferenceTier.MEDIUM:
+            return cls(
+                target_qoi_rel_change=1e-3,
+                max_passes=12,
+                max_dofs=2_000_000,
+                confirmations=2,
+            )
+        return cls(
+            target_qoi_rel_change=3e-4,
+            max_passes=16,
+            max_dofs=8_000_000,
+            confirmations=3,
+        )
 
     def __post_init__(self) -> None:
         """Reject policies that could never terminate or never refine."""
@@ -314,6 +374,8 @@ class ReferencePolicy:
             raise SimulationRequestError(f"Unknown element order {self.element_order!r}")
         if self.linear_backend not in {"auto", "direct", "iterative"}:
             raise SimulationRequestError(f"Unknown linear backend {self.linear_backend!r}")
+        if self.confirmations < 1:
+            raise SimulationRequestError("Convergence needs at least one confirming pass")
 
     def to_payload(self) -> dict[str, Any]:
         """Serialise for the job spec."""
@@ -327,6 +389,7 @@ class ReferencePolicy:
             "goal_oriented": self.goal_oriented,
             "linear_backend": self.linear_backend,
             "linear_tolerance_fraction": self.linear_tolerance_fraction,
+            "confirmations": self.confirmations,
         }
 
     @classmethod
@@ -637,7 +700,7 @@ class WorkerLimits:
     lease_seconds: float
     max_attempts: int
     #: Hardest ceiling an adaptive run may request, whatever the client asks.
-    max_reference_passes: int = 8
+    max_reference_passes: int = 24
     max_reference_dofs: int = 8_000_000
     #: Worker memory available to concurrent jobs, for admission control.
     memory_budget_bytes: int = 8 * 1024**3

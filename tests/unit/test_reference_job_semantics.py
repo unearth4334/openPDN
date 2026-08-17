@@ -19,6 +19,7 @@ from openpdn.application.simulation_models import (
     JobState,
     LoadSpec,
     ReferencePolicy,
+    ReferenceTier,
     ResolvedMeshSpec,
     ResultQuality,
     SimulationDraft,
@@ -124,6 +125,48 @@ class TestPolicyValidation:
     def test_a_policy_round_trips_through_its_payload(self):
         policy = ReferencePolicy(max_passes=7, theta=0.6, element_order="p1")
         assert ReferencePolicy.from_payload(policy.to_payload()) == policy
+
+
+class TestTierPresets:
+    """Named tiers resolve to numbers and are then forgotten (ADR-0011)."""
+
+    def test_the_ladder_orders_strictly(self):
+        low = ReferencePolicy.for_tier(ReferenceTier.LOW)
+        medium = ReferencePolicy.for_tier(ReferenceTier.MEDIUM)
+        high = ReferencePolicy.for_tier(ReferenceTier.HIGH)
+        assert low.target_qoi_rel_change > medium.target_qoi_rel_change
+        assert medium.target_qoi_rel_change > high.target_qoi_rel_change
+        assert low.max_passes < medium.max_passes < high.max_passes
+        assert low.max_dofs < medium.max_dofs < high.max_dofs
+        # Stronger claims demand more consecutive confirming passes,
+        # because two non-nested meshes can agree by accident.
+        assert low.confirmations < medium.confirmations < high.confirmations
+
+    def test_bare_defaults_are_the_medium_tier(self):
+        # An unqualified Reference request means "medium": the same numbers
+        # whether or not the tier name is spelled out.
+        assert ReferencePolicy() == ReferencePolicy.for_tier(ReferenceTier.MEDIUM)
+
+    def test_every_tier_fits_the_default_administrative_ceilings(self):
+        # A preset the server would refuse out of the box is a trap, not a
+        # convenience.
+        limits = WorkerLimits(
+            max_dofs=1_500_000,
+            max_concurrent_jobs=1,
+            max_job_seconds=1800.0,
+            lease_seconds=60.0,
+            max_attempts=3,
+        )
+        for tier in ReferenceTier:
+            policy = ReferencePolicy.for_tier(tier)
+            assert policy.max_passes <= limits.max_reference_passes
+            assert policy.max_dofs <= limits.max_reference_dofs
+
+    def test_the_resolved_policy_carries_no_tier_name(self):
+        # The spec stores resolved values only; "medium" must not be
+        # recoverable from (or hashed into) the frozen policy.
+        payload = ReferencePolicy.for_tier(ReferenceTier.MEDIUM).to_payload()
+        assert "tier" not in payload
 
 
 class TestDraftValidation:

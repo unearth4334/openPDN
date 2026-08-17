@@ -132,6 +132,26 @@ Direct solves: ~1e-13 to 1e-10 across the suite; 8.5e-8 at 2.28M DOFs.
 Warning threshold 1e-6, error 1e-3 (ADR-0010 §6), unchanged and enforced at
 every adaptive generation.
 
+## Sub-tiers
+
+`ReferenceTier` presets resolve to policy numbers at draft time and are then
+forgotten (the spec and signature carry only resolved values, per ADR-0011).
+Measured on `plane_neck_plane_board` from the coarse Reference start, after
+the boundary-sampling fix below:
+
+    tier     target    passes  DOF ceiling  confirmations   converges at
+    low      1 %       ≤ 6     500 k        1               ~4 passes, err ~9e-4
+    medium   0.1 %     ≤ 12    2 M          2               ~7-10 passes, err ~2e-4
+    high     0.03 %    ≤ 16    8 M          3               ~9-12 passes, err ~8e-5
+
+Calibrating the tiers exposed and fixed a mesher defect: boundary sampling
+consulted the refinement field only at pilot points (spaced at half the
+maximum element size), so demands finer than that were silently ignored --
+the adaptive loop froze at an identical mesh for seventeen consecutive
+generations while `dQoI` collapsed to 1e-8, self-consistency masquerading as
+convergence. With the per-step fix, the loop reaches the stored reference's
+own uncertainty band (~2e-4) by ~5,000 DOFs, and `θ` is calibrated at 0.7.
+
 ## Orchestration
 
 Reference jobs freeze a `ReferencePolicy` (never a mesh), hashed into the

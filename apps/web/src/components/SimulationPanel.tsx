@@ -35,6 +35,22 @@ import type {
 } from "../api/types";
 import { useBoardState } from "../state/boardState";
 
+/**
+ * Reference sub-tier presets. Mirrors `ReferencePolicy.for_tier` in the
+ * application layer -- the server resolves the same numbers from the same
+ * names, these exist so the fields show what a tier means before queueing.
+ * Measured calibration: low converges in ~4-6 passes, medium ~7-12 with two
+ * confirming passes, high pushes to the re-meshing noise floor with three.
+ */
+const REFERENCE_TIERS: Record<
+  "low" | "medium" | "high",
+  { targetPct: string; maxPasses: string; maxDofs: string }
+> = {
+  low: { targetPct: "1.0", maxPasses: "6", maxDofs: "500000" },
+  medium: { targetPct: "0.10", maxPasses: "12", maxDofs: "2000000" },
+  high: { targetPct: "0.03", maxPasses: "16", maxDofs: "8000000" },
+};
+
 const ACCURACY_LABELS: { id: AccuracyProfile; label: string }[] = [
   { id: "preview", label: "Preview" },
   { id: "standard", label: "Standard" },
@@ -64,9 +80,10 @@ export function SimulationPanel() {
   const [sourceVoltage, setSourceVoltage] = useState("0.85");
   const [loads, setLoads] = useState<LoadRow[]>([{ terminalIds: [], viaIds: [], currentA: "1.0" }]);
   const [accuracy, setAccuracy] = useState<AccuracyProfile>("standard");
-  const [refTargetPct, setRefTargetPct] = useState("0.10");
-  const [refMaxPasses, setRefMaxPasses] = useState("5");
-  const [refMaxDofs, setRefMaxDofs] = useState("2000000");
+  const [refTier, setRefTier] = useState<"low" | "medium" | "high" | "custom">("medium");
+  const [refTargetPct, setRefTargetPct] = useState(REFERENCE_TIERS.medium.targetPct);
+  const [refMaxPasses, setRefMaxPasses] = useState(REFERENCE_TIERS.medium.maxPasses);
+  const [refMaxDofs, setRefMaxDofs] = useState(REFERENCE_TIERS.medium.maxDofs);
   const [refElementOrder, setRefElementOrder] = useState<"p1" | "p2">("p2");
   const [viaPlatingUm, setViaPlatingUm] = useState("25");
   const [estimate, setEstimate] = useState<EstimateResponse | null>(null);
@@ -441,6 +458,35 @@ export function SimulationPanel() {
               </div>
               {accuracy === "reference" ? (
                 <div className="sim-reference">
+                  <div className="sim-field">
+                    <span className="sim-field__label">Tier</span>
+                    <div className="sim-accuracy" role="radiogroup" aria-label="Reference tier">
+                      {(["low", "medium", "high"] as const).map((tier) => (
+                        <button
+                          key={tier}
+                          type="button"
+                          className="sim-accuracy__stop"
+                          aria-pressed={refTier === tier}
+                          onClick={() => {
+                            setRefTier(tier);
+                            setRefTargetPct(REFERENCE_TIERS[tier].targetPct);
+                            setRefMaxPasses(REFERENCE_TIERS[tier].maxPasses);
+                            setRefMaxDofs(REFERENCE_TIERS[tier].maxDofs);
+                          }}
+                        >
+                          {tier}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="sim-accuracy__stop"
+                        aria-pressed={refTier === "custom"}
+                        onClick={() => setRefTier("custom")}
+                      >
+                        custom
+                      </button>
+                    </div>
+                  </div>
                   <label className="sim-field">
                     <span className="sim-field__label">Target convergence</span>
                     <span className="sim-field__unit-row">
@@ -450,7 +496,10 @@ export function SimulationPanel() {
                         min="0.001"
                         value={refTargetPct}
                         aria-label="Reference convergence target in percent"
-                        onChange={(event) => setRefTargetPct(event.target.value)}
+                        onChange={(event) => {
+                          setRefTargetPct(event.target.value);
+                          setRefTier("custom");
+                        }}
                       />
                       <span className="sim-field__unit">%</span>
                     </span>
@@ -463,7 +512,10 @@ export function SimulationPanel() {
                       min="1"
                       max="32"
                       value={refMaxPasses}
-                      onChange={(event) => setRefMaxPasses(event.target.value)}
+                      onChange={(event) => {
+                        setRefMaxPasses(event.target.value);
+                        setRefTier("custom");
+                      }}
                     />
                   </label>
                   <label className="sim-field">
@@ -473,7 +525,10 @@ export function SimulationPanel() {
                       step="100000"
                       min="1000"
                       value={refMaxDofs}
-                      onChange={(event) => setRefMaxDofs(event.target.value)}
+                      onChange={(event) => {
+                        setRefMaxDofs(event.target.value);
+                        setRefTier("custom");
+                      }}
                     />
                   </label>
                   <label className="sim-field">

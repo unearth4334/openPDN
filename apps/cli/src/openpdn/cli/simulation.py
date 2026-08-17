@@ -20,6 +20,7 @@ from openpdn.application.simulation_models import (
     AccuracyProfile,
     LoadSpec,
     ReferencePolicy,
+    ReferenceTier,
     SimulationDraft,
     SimulationKind,
     SimulationRequestError,
@@ -53,34 +54,46 @@ def register(subparsers: Any) -> None:
             },
         ),
         (
+            "--reference-tier",
+            {
+                "choices": [t.value for t in ReferenceTier],
+                "default": None,
+                "help": (
+                    "Reference only: measured preset (low/medium/high) that "
+                    "seeds target, passes and DOF ceiling; explicit flags "
+                    "override it."
+                ),
+            },
+        ),
+        (
             "--target-error",
             {
                 "type": float,
-                "default": 1e-3,
-                "help": "Reference only: QoI relative-change target (default 1e-3).",
+                "default": None,
+                "help": "Reference only: QoI relative-change target.",
             },
         ),
         (
             "--max-passes",
             {
                 "type": int,
-                "default": 5,
-                "help": "Reference only: adaptive pass ceiling (default 5).",
+                "default": None,
+                "help": "Reference only: adaptive pass ceiling.",
             },
         ),
         (
             "--max-dofs",
             {
                 "type": int,
-                "default": 2_000_000,
-                "help": "Reference only: DOF ceiling (default 2,000,000).",
+                "default": None,
+                "help": "Reference only: DOF ceiling.",
             },
         ),
         (
             "--element-order",
             {
                 "choices": ["p1", "p2"],
-                "default": "p2",
+                "default": None,
                 "help": "Reference only: element order (default p2).",
             },
         ),
@@ -185,12 +198,7 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
     net_id = _resolve_net(board, args.net)
     plating_m = args.via_plating_um * 1e-6 if args.via_plating_um is not None else None
     reference_policy = (
-        ReferencePolicy(
-            target_qoi_rel_change=args.target_error,
-            max_passes=args.max_passes,
-            max_dofs=args.max_dofs,
-            element_order=args.element_order,
-        )
+        _reference_policy_from_args(args)
         if args.accuracy == AccuracyProfile.REFERENCE.value
         else None
     )
@@ -271,6 +279,30 @@ def _command_simulate(args: argparse.Namespace, container: Container) -> int:
     for diagnostic in result.diagnostics:
         print(f"  [{diagnostic.severity}] {diagnostic.code}: {diagnostic.message}")
     return EXIT_OK
+
+
+def _reference_policy_from_args(args: argparse.Namespace) -> ReferencePolicy:
+    """Resolve tier preset plus explicit flag overrides into one policy.
+
+    Same semantics as the HTTP API, so a queued job and a CLI run of the
+    same words mean the same numbers.
+    """
+    base = (
+        ReferencePolicy.for_tier(ReferenceTier(args.reference_tier))
+        if args.reference_tier is not None
+        else ReferencePolicy()
+    )
+    return ReferencePolicy(
+        target_qoi_rel_change=(
+            base.target_qoi_rel_change if args.target_error is None else args.target_error
+        ),
+        max_passes=base.max_passes if args.max_passes is None else args.max_passes,
+        max_dofs=base.max_dofs if args.max_dofs is None else args.max_dofs,
+        theta=base.theta,
+        refinement_ratio=base.refinement_ratio,
+        element_order=(base.element_order if args.element_order is None else args.element_order),
+        confirmations=base.confirmations,
+    )
 
 
 def _resolve_net(board: Board, name_or_id: str) -> str:

@@ -85,9 +85,18 @@ extension of that pipeline, not a parallel one.
   It earns its extra solve only when the functional and the excitation
   differ: one load's voltage among several, or a probe across terminals
   other than the driven pair. Off by default for that reason.
-* Marking is **Dörfler bulk marking**; `theta = 0.5` is a starting value from
-  the usual range, not a measured optimum. If you change it, measure and
-  record what you measured.
+* Marking is **Dörfler bulk marking**; `theta = 0.7`, calibrated (0.7
+  reaches the 1e-3 target in 7 passes vs 0.5's 10, near-equal final DOFs).
+  If you change it, re-measure and record.
+* **`dQoI` collapse is not convergence evidence on its own.** A mesher
+  defect once froze refinement (boundary sampling ignored field demands
+  finer than pilot spacing) and successive identical meshes drove `dQoI`
+  to 1e-8 while true error sat at 1.1e-3. If `dQoI` plummets while DOFs
+  stop growing and `eta` stops falling, suspect stalled refinement before
+  celebrating.
+* Reference sub-tiers (`ReferenceTier.LOW/MEDIUM/HIGH`) resolve to policy
+  numbers at draft time and are forgotten -- never store or hash the tier
+  name (ADR-0011's rule for profile names applies).
 * **Feature floors override the estimator.** Terminals, via contacts and
   annuli, neck-downs and narrow copper hold a mandatory minimum resolution
   whatever their indicator says. An estimate must never be allowed to conclude

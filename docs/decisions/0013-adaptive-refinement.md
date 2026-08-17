@@ -172,6 +172,23 @@ an error estimator can drive.
   orders disagreeing by more than their apparent convergence is the signal
   that the reference, not the method, is at fault. A reference must be
   demonstrably converged, not merely the finest run to hand.
+* **The mesher's boundary sampling silently ignored refinement demands**
+  finer than its pilot spacing (half the maximum element size): a
+  refinement well tens of micrometres wide fell between pilots, boundary
+  spacing never refined, and the loop froze at an identical mesh for
+  seventeen consecutive generations while `dQoI` collapsed to `1e-8` --
+  self-consistency masquerading as convergence, with the true error stuck
+  at `1.1e-3`. Fixed by consulting the refinement field per placement
+  *step* rather than per pilot. After the fix the same run reaches a true
+  error of `1.6e-4` at `2,328` DOFs and settles into the reference value's
+  own uncertainty band (`~2e-4`) by `5,000` DOFs. Every convergence claim
+  made against the stalled mesher understated what adaptivity delivers.
+* **`theta` is now calibrated, as §6 demanded: `0.7`.** Measured on the
+  neck board after the mesher fix, `theta=0.7` reaches the `1e-3` target in
+  7 passes against `theta=0.5`'s 10, at nearly the same final DOF count --
+  and passes, each a full re-mesh and solve, are the scarce resource from a
+  coarse start (DOF growth per pass is only ~1.1-1.4x, because marking
+  selects a subset and refinement halves locally).
 * **The stopping rule needs the estimator, not just the quantity of
   interest.** A first implementation stopped on QoI change plus conservation
   alone and declared convergence on two successive meshes that happened to

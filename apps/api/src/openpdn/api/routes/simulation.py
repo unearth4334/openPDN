@@ -39,6 +39,7 @@ from openpdn.application.simulation_models import (
     JobRecord,
     LoadSpec,
     ReferencePolicy,
+    ReferenceTier,
     SimulationDraft,
     SimulationKind,
     SimulationRequestError,
@@ -65,33 +66,61 @@ class ReferencePolicyRequest(BaseModel):
     """Adaptive policy for a Reference run.
 
     Required by the `reference` profile and rejected by the others, since a
-    fixed-mesh profile has nothing to adapt. Bounds here are shape checks;
-    the administrative ceilings are enforced server-side, where a client
-    cannot see or move them.
+    fixed-mesh profile has nothing to adapt. A `tier` names a measured
+    preset (low / medium / high); any explicitly supplied field overrides
+    the preset's value, and with neither tier nor fields the medium-strength
+    defaults apply. Bounds here are shape checks; the administrative
+    ceilings are enforced server-side, where a client cannot see or move
+    them -- so a request within these bounds can still be refused.
     """
 
-    target_qoi_rel_change: float = Field(default=1e-3, gt=0.0, lt=1.0)
-    max_passes: int = Field(default=5, ge=1, le=32)
-    max_dofs: int = Field(default=2_000_000, gt=0)
-    theta: float = Field(default=0.5, gt=0.0, le=1.0)
-    refinement_ratio: float = Field(default=2.0, gt=1.0, le=8.0)
-    element_order: Literal["p1", "p2"] = "p2"
-    goal_oriented: bool = False
-    linear_backend: Literal["auto", "direct", "iterative"] = "auto"
-    linear_tolerance_fraction: float = Field(default=0.05, gt=0.0, le=1.0)
+    tier: Literal["low", "medium", "high"] | None = None
+    target_qoi_rel_change: float | None = Field(default=None, gt=0.0, lt=1.0)
+    max_passes: int | None = Field(default=None, ge=1, le=32)
+    max_dofs: int | None = Field(default=None, gt=0)
+    theta: float | None = Field(default=None, gt=0.0, le=1.0)
+    refinement_ratio: float | None = Field(default=None, gt=1.0, le=8.0)
+    element_order: Literal["p1", "p2"] | None = None
+    goal_oriented: bool | None = None
+    linear_backend: Literal["auto", "direct", "iterative"] | None = None
+    linear_tolerance_fraction: float | None = Field(default=None, gt=0.0, le=1.0)
 
     def to_policy(self) -> ReferencePolicy:
-        """Map to the application-layer policy."""
+        """Resolve tier and overrides into the frozen application policy.
+
+        The tier itself is never stored: exactly as accuracy profiles
+        resolve to mesh numbers (ADR-0011), a tier resolves to policy
+        numbers here and is then forgotten, so a re-run cannot depend on
+        what "medium" meant the day the job was queued.
+        """
+        base = (
+            ReferencePolicy.for_tier(ReferenceTier(self.tier))
+            if self.tier is not None
+            else ReferencePolicy()
+        )
         return ReferencePolicy(
-            target_qoi_rel_change=self.target_qoi_rel_change,
-            max_passes=self.max_passes,
-            max_dofs=self.max_dofs,
-            theta=self.theta,
-            refinement_ratio=self.refinement_ratio,
-            element_order=self.element_order,
-            goal_oriented=self.goal_oriented,
-            linear_backend=self.linear_backend,
-            linear_tolerance_fraction=self.linear_tolerance_fraction,
+            target_qoi_rel_change=(
+                base.target_qoi_rel_change
+                if self.target_qoi_rel_change is None
+                else self.target_qoi_rel_change
+            ),
+            max_passes=base.max_passes if self.max_passes is None else self.max_passes,
+            max_dofs=base.max_dofs if self.max_dofs is None else self.max_dofs,
+            theta=base.theta if self.theta is None else self.theta,
+            refinement_ratio=(
+                base.refinement_ratio if self.refinement_ratio is None else self.refinement_ratio
+            ),
+            element_order=base.element_order if self.element_order is None else self.element_order,
+            goal_oriented=base.goal_oriented if self.goal_oriented is None else self.goal_oriented,
+            linear_backend=(
+                base.linear_backend if self.linear_backend is None else self.linear_backend
+            ),
+            linear_tolerance_fraction=(
+                base.linear_tolerance_fraction
+                if self.linear_tolerance_fraction is None
+                else self.linear_tolerance_fraction
+            ),
+            confirmations=base.confirmations,
         )
 
 

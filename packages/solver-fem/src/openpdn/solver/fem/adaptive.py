@@ -129,9 +129,12 @@ class AdaptivePolicy:
     #: a converged result (ADR-0013 §8).
     max_passes: int = 5
     max_dofs: int = 2_000_000
-    #: Dorfler bulk-marking fraction. 0.5 is a starting value from the usual
-    #: 0.4-0.7 range, not a measured optimum for this problem class.
-    theta: float = 0.5
+    #: Dorfler bulk-marking fraction. Calibrated at 0.7 (the calibration
+    #: ADR-0013 §6 demanded): measured on the neck board, theta=0.7 reaches
+    #: the 1e-3 target in 7 passes against theta=0.5's 10, at nearly the
+    #: same final DOF count -- and passes, each a full re-mesh and solve,
+    #: are the scarce resource.
+    theta: float = 0.7
     #: How much smaller a marked element's target size becomes per pass.
     refinement_ratio: float = 2.0
     #: Weight indicators by the adjoint solution before marking. Off by

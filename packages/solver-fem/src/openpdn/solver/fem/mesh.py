@@ -54,6 +54,8 @@ from openpdn.solver.fem.controls import (
 from openpdn.solver.fem.errors import MeshGenerationError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy.typing as npt
 
     from openpdn.solver.fem.controls import MeshControls
@@ -296,15 +298,52 @@ def _sample_ring(
     pilot_sizes = np.maximum(pilot_sizes, controls.min_size_m)
 
     # Placement pass: walk the ring, stepping by the locally measured size.
+    #
+    # The refinement field is consulted per *step*, not only at pilots.
+    # Pilots are spaced at half the maximum element size, so an adaptive
+    # refinement well -- tens of micrometres wide around a marked corner --
+    # falls invisibly between them: interpolation never sees the demand, the
+    # boundary stays coarse, and boundary-adjacent elements stall at the
+    # pilot-scale size no matter what the field asks for. Measured before
+    # this fix: demands below ~25 um were silently ignored and the adaptive
+    # loop froze at the same mesh for seventeen consecutive generations.
     keep_all_vertices = perimeter <= SMALL_RING_PERIMETER_IN_SIZES * controls.max_size_m
     corner_arcs = _corner_arc_positions(closed, seg_lengths, keep_all_vertices)
 
+    cumulative = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+    refinement = controls.refinement
+
+    def _point_at(arc: float) -> npt.NDArray[np.float64]:
+        wrapped = arc % perimeter
+        segment = min(int(np.searchsorted(cumulative, wrapped, side="right")) - 1, len(closed) - 2)
+        fraction = (wrapped - cumulative[segment]) / max(seg_lengths[segment], 1e-300)
+        point: npt.NDArray[np.float64] = closed[segment] + fraction * (
+            closed[segment + 1] - closed[segment]
+        )
+        return point
+
+    def _local_size(arc: float) -> float:
+        base = float(np.interp(arc % perimeter, pilot_arcs, pilot_sizes, period=perimeter))
+        if refinement is None or not len(refinement):
+            return base
+        demanded = float(
+            refinement.target_at(
+                _point_at(arc).reshape(1, 2), controls.growth_rate, controls.max_size_m
+            )[0]
+        )
+        return max(min(base, demanded), controls.min_size_m)
+
     placed_arcs: list[float] = []
     for start, stop in itertools.pairwise(corner_arcs):
-        placed_arcs.extend(_walk_span(start, stop, pilot_arcs, pilot_sizes, perimeter))
+        placed_arcs.extend(_walk_span(start, stop, _local_size))
     arcs = np.asarray(placed_arcs, dtype=np.float64)
     xy, _ = _points_along(closed, seg_lengths, arcs)
     sizes = np.interp(arcs, pilot_arcs, pilot_sizes, period=perimeter)
+    if refinement is not None and len(refinement):
+        sizes = np.maximum(
+            np.minimum(sizes, refinement.target_at(xy, controls.growth_rate, controls.max_size_m)),
+            controls.min_size_m,
+        )
     del polygon  # containment is enforced later, on triangles
     return xy, sizes
 
@@ -343,14 +382,13 @@ def _corner_arc_positions(
 def _walk_span(
     start: float,
     stop: float,
-    pilot_arcs: npt.NDArray[np.float64],
-    pilot_sizes: npt.NDArray[np.float64],
-    perimeter: float,
+    local_size: Callable[[float], float],
 ) -> list[float]:
     """Place arc positions from `start` (inclusive) to `stop` (exclusive).
 
-    Steps by the interpolated local size; the final sub-interval is stretched
-    or merged so spacing stays within about 1.5x of the local target.
+    Steps by the caller's local size function; the final sub-interval is
+    stretched or merged so spacing stays within about 1.5x of the local
+    target.
     """
     span = stop - start
     if span <= 0.0:
@@ -358,7 +396,7 @@ def _walk_span(
     positions = [start]
     arc = start
     while True:
-        step = float(np.interp(arc % perimeter, pilot_arcs, pilot_sizes, period=perimeter))
+        step = local_size(arc)
         if arc + step >= stop:
             remainder = stop - arc
             if remainder > 0.6 * step and len(positions) >= 1:

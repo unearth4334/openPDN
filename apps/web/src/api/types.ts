@@ -266,7 +266,11 @@ export type AccuracyProfile = "preview" | "standard" | "high" | "verification" |
  * Server-side ceilings are stricter than these bounds and are not visible
  * here, so a request within them can still be refused.
  */
+export type ReferenceTier = "low" | "medium" | "high";
+
 export interface ReferencePolicyRequest {
+  /** Measured preset seeding the fields below; explicit fields override. */
+  tier?: ReferenceTier | null;
   target_qoi_rel_change?: number;
   max_passes?: number;
   max_dofs?: number;

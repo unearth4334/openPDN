@@ -132,7 +132,7 @@ class Settings(BaseSettings):
         description="Worker lease duration; expired leases trigger recovery.",
     )
     worker_max_reference_passes: int = Field(
-        default=8,
+        default=24,
         ge=1,
         le=32,
         description=(

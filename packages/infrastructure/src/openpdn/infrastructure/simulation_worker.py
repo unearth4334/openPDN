@@ -295,6 +295,7 @@ def _execute_reference(
                 theta=policy.theta,
                 refinement_ratio=policy.refinement_ratio,
                 goal_oriented=policy.goal_oriented,
+                confirmations=policy.confirmations,
                 max_seconds=time_budget_seconds,
             ),
             resume=resume,
@@ -525,6 +526,7 @@ def run_inline(
                 theta=policy.theta,
                 refinement_ratio=policy.refinement_ratio,
                 goal_oriented=policy.goal_oriented,
+                confirmations=policy.confirmations,
             ),
         )
         if outcome.field_data is None:  # pragma: no cover - the loop always solves

@@ -23,6 +23,7 @@ from openpdn.application.simulation_models import (
     AccuracyProfile,
     LoadSpec,
     ReferencePolicy,
+    ReferenceTier,
     SimulationDraft,
     SimulationKind,
     SimulationRequestError,
@@ -66,7 +67,7 @@ def service(tmp_path):
             max_job_seconds=1800.0,
             lease_seconds=60.0,
             max_attempts=3,
-            max_reference_passes=8,
+            max_reference_passes=24,
             max_reference_dofs=8_000_000,
         ),
         solver_name="fem-2p5d",
@@ -168,3 +169,38 @@ class TestServerSideRefusals:
     def test_a_fixed_mesh_profile_carrying_a_policy_is_refused(self, service):
         with pytest.raises(SimulationRequestError, match="cannot carry an adaptive policy"):
             service.plan(_draft(AccuracyProfile.STANDARD, reference_policy=ReferencePolicy()))
+
+
+class TestTierThroughTheApi:
+    """The HTTP request model's tier-plus-override resolution."""
+
+    def test_a_tier_seeds_the_policy(self):
+        from openpdn.api.routes.simulation import ReferencePolicyRequest
+
+        resolved = ReferencePolicyRequest(tier="high").to_policy()
+        assert resolved == ReferencePolicy.for_tier(ReferenceTier.HIGH)
+
+    def test_an_explicit_field_overrides_its_tier_value(self):
+        from openpdn.api.routes.simulation import ReferencePolicyRequest
+
+        resolved = ReferencePolicyRequest(tier="low", max_dofs=750_000).to_policy()
+        expected_base = ReferencePolicy.for_tier(ReferenceTier.LOW)
+        assert resolved.max_dofs == 750_000
+        assert resolved.target_qoi_rel_change == expected_base.target_qoi_rel_change
+        assert resolved.confirmations == expected_base.confirmations
+
+    def test_no_tier_and_no_fields_means_medium(self):
+        from openpdn.api.routes.simulation import ReferencePolicyRequest
+
+        assert ReferencePolicyRequest().to_policy() == ReferencePolicy.for_tier(
+            ReferenceTier.MEDIUM
+        )
+
+    def test_every_tier_queues_through_the_real_service(self, service):
+        for tier in ReferenceTier:
+            draft = _draft(
+                AccuracyProfile.REFERENCE,
+                reference_policy=ReferencePolicy.for_tier(tier),
+            )
+            queued = service.queue(draft)
+            assert queued.job.spec.reference_policy == ReferencePolicy.for_tier(tier)
